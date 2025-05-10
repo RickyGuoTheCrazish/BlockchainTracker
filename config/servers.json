@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Blockchain DB",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "blockchain",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "PassFile": "/pgpass"
+    }
+  }
+} 

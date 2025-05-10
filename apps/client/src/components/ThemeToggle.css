@@ -1,0 +1,31 @@
+.theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.3s, color 0.3s;
+  color: var(--text-color-secondary);
+  margin-left: 12px;
+}
+
+.theme-toggle:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--text-color);
+}
+
+.dark-theme .theme-toggle {
+  color: var(--highlight-color);
+}
+
+.dark-theme .theme-toggle:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.theme-toggle svg {
+  width: 20px;
+  height: 20px;
+} 

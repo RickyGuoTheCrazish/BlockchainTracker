@@ -1,0 +1,112 @@
+:root {
+  /* Light Theme (Default) */
+  --background-color: #f5f5f7;
+  --card-background: #ffffff;
+  --text-color: #333333;
+  --text-color-secondary: #666666;
+  --border-color: #e1e1e1;
+  --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --highlight-color: #3182ce;
+  --button-background: #4a5568;
+  --button-text: #ffffff;
+  --table-header-bg: #f8f9fa;
+  --table-row-hover: #f5f7fa;
+  --table-border: #eaeaea;
+  --bitcoin-color: #f7931a;
+  --ethereum-color: #627eea;
+  --success-color: #0d8050;
+  --error-color: #e53e3e;
+  --transaction-field-bg: #f8f9fa;
+  --address-bg: #edf2f7;
+}
+
+.dark-theme {
+  --background-color: #0f1117;
+  --card-background: #1a1c25;
+  --text-color: #e4e9ff;
+  --text-color-secondary: #b8c0e0;
+  --border-color: #2d3249;
+  --card-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+  --highlight-color: #61a0f8;
+  --button-background: #61a0f8;
+  --button-text: #0f1117;
+  --table-header-bg: #1e2132;
+  --table-row-hover: #272b40;
+  --table-border: #2d3249;
+  --bitcoin-color: #ffa726;
+  --ethereum-color: #7986ec;
+  --success-color: #a5d6a7;
+  --error-color: #ff8a80;
+  --transaction-field-bg: #1e2132;
+  --address-bg: #272b40;
+}
+
+/* Apply theme colors to body */
+body {
+  background-color: var(--background-color);
+  color: var(--text-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Card styling */
+.card, .transaction-card {
+  background-color: var(--card-background);
+  box-shadow: var(--card-shadow);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+
+/* Links */
+a {
+  color: var(--highlight-color);
+}
+
+/* Tables */
+.transactions-table th {
+  background-color: var(--table-header-bg);
+  color: var(--text-color);
+  border-bottom: 1px solid var(--table-border);
+}
+
+.transactions-table td {
+  border-bottom: 1px solid var(--table-border);
+}
+
+.transactions-table tr:hover {
+  background-color: var(--table-row-hover);
+}
+
+/* Transaction details */
+.transaction-field {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.field-label {
+  color: var(--text-color-secondary);
+}
+
+.field-value {
+  color: var(--text-color);
+}
+
+.address-value {
+  background-color: var(--address-bg);
+}
+
+/* Form elements */
+input, select, textarea {
+  background-color: var(--card-background);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+
+button {
+  background-color: var(--button-background);
+  color: var(--button-text);
+}
+
+/* Status badges */
+.status-badge {
+  background-color: rgba(13, 128, 80, 0.2);
+  color: var(--success-color);
+} 

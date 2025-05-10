@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: blockchain-postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    env_file:
+      - ./config/postgres.env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: blockchain-pgadmin
+    restart: always
+    ports:
+      - "5050:80"
+    env_file:
+      - ./config/pgadmin.env
+    volumes:
+      - ./config/servers.json:/pgadmin4/servers.json
+      - ./config/pgpass:/pgpass
+    depends_on:
+      - postgres
+      
+  server:
+    build:
+      context: ./apps/server
+      dockerfile: Dockerfile
+    container_name: blockchain-server
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./config/server.env
+    environment:
+      - NODE_ENV=development
+      - API_BASE_PATH=/api
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./apps/client
+      dockerfile: Dockerfile
+    container_name: blockchain-client
+    restart: always
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+
+volumes:
+  postgres-data: 

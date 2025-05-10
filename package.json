@@ -1,0 +1,28 @@
+{
+  "name": "blockchain-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Blockchain activity tracker with live updates",
+  "scripts": {
+    "client": "cd apps/client && npm run dev",
+    "server": "cd apps/server && npm run dev",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "setup": "concurrently \"cd apps/server && npm install\" \"cd apps/client && npm install\"",
+    "test": "concurrently \"cd apps/server && npm test\" \"cd apps/client && npm test\"",
+    "build": "concurrently \"cd apps/server && npm run build\" \"cd apps/client && npm run build\""
+  },
+  "keywords": [
+    "blockchain",
+    "ethereum",
+    "bitcoin",
+    "api",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "@types/uuid": "^10.0.0"
+  }
+}

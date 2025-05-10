@@ -1,0 +1,324 @@
+.wallet-detail-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 2rem;
+}
+
+.wallet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.wallet-header h2 {
+  margin: 0;
+  color: var(--text-color);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.wallet-external-links {
+  display: flex;
+  gap: 1rem;
+}
+
+.external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--highlight-color);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.external-link:hover {
+  text-decoration: underline;
+}
+
+.wallet-address-card {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--card-shadow);
+}
+
+.wallet-address-card h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  color: var(--text-color);
+  font-size: 1.1rem;
+}
+
+.wallet-address {
+  font-family: monospace;
+  word-break: break-all;
+  padding: 0.75rem;
+  background-color: var(--background-color);
+  border-radius: 4px;
+  color: var(--text-color);
+  font-size: 0.9rem;
+}
+
+.wallet-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.summary-card {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: var(--card-shadow);
+}
+
+.summary-card h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  color: var(--text-color-secondary);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.summary-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.wallet-transactions, 
+.wallet-additional-info {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--card-shadow);
+}
+
+.wallet-transactions h3, 
+.wallet-additional-info h3 {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  color: var(--text-color);
+  font-size: 1.1rem;
+}
+
+.transactions-table-container {
+  overflow-x: auto;
+}
+
+.transactions-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.transactions-table th,
+.transactions-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.transactions-table th {
+  background-color: var(--table-header-bg);
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.transactions-table tr:last-child td {
+  border-bottom: none;
+}
+
+.transactions-table tr:hover {
+  background-color: var(--table-row-hover);
+}
+
+.transaction-link {
+  color: var(--highlight-color);
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.transaction-link:hover {
+  text-decoration: underline;
+}
+
+.transaction-type {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.transaction-type.incoming {
+  background-color: rgba(39, 174, 96, 0.2);
+  color: #27ae60;
+}
+
+.transaction-type.outgoing {
+  background-color: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+}
+
+.additional-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+.info-item {
+  margin-bottom: 1rem;
+}
+
+.info-label {
+  font-size: 0.9rem;
+  color: var(--text-color-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.info-value {
+  font-size: 1rem;
+  color: var(--text-color);
+}
+
+/* Error styles */
+.wallet-error-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 60vh;
+  padding: 2rem;
+}
+
+.wallet-error-card {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 2rem;
+  max-width: 600px;
+  width: 100%;
+  text-align: center;
+}
+
+.wallet-error-card h2 {
+  color: var(--text-color);
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.wallet-error-card p {
+  color: var(--text-color-secondary);
+  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+}
+
+.wallet-error-address {
+  background-color: var(--background-color);
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1.5rem;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.wallet-error-actions {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.wallet-error-button {
+  padding: 0.75rem 1.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+
+.wallet-error-button:hover {
+  background-color: var(--table-row-hover);
+}
+
+.wallet-error-button.primary {
+  background-color: var(--highlight-color);
+  color: white;
+  border: none;
+}
+
+.wallet-error-button.primary:hover {
+  filter: brightness(1.1);
+}
+
+/* API limited notice */
+.wallet-api-limited-notice {
+  background-color: rgba(255, 193, 7, 0.2);
+  border-left: 4px solid #ffc107;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  border-radius: 4px;
+}
+
+.wallet-api-limited-notice p {
+  margin: 0;
+  color: #856404;
+}
+
+.wallet-api-limited-notice strong {
+  font-weight: 600;
+}
+
+/* Wallet refresh button */
+.wallet-refresh-button {
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  margin-top: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s;
+  font-weight: 500;
+}
+
+.wallet-refresh-button:hover {
+  background-color: #45a049;
+}
+
+.wallet-refresh-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+/* When inside api limited notice, make the button more prominent */
+.wallet-api-limited-notice .wallet-refresh-button {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 20px;
+  font-size: 15px;
+}
+
+/* Wallet header actions container */
+.wallet-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+} 

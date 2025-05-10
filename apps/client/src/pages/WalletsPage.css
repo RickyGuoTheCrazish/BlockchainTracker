@@ -1,0 +1,181 @@
+.wallets-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.wallets-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.wallets-header h2 {
+  margin: 0;
+  color: var(--text-color);
+}
+
+.add-wallet-button {
+  background-color: var(--highlight-color);
+  color: var(--button-text);
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.add-wallet-button:hover {
+  opacity: 0.9;
+}
+
+.add-wallet-form-container {
+  background-color: var(--card-background);
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--card-shadow);
+}
+
+.add-wallet-form-container h3 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: var(--text-color);
+}
+
+.add-wallet-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: var(--text-color-secondary);
+}
+
+.form-group input,
+.form-group select {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 1rem;
+  background-color: var(--card-background);
+  color: var(--text-color);
+}
+
+.submit-button {
+  background-color: var(--highlight-color);
+  color: var(--button-text);
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  align-self: end;
+}
+
+.submit-button:hover {
+  opacity: 0.9;
+}
+
+.balance-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.balance-card {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: var(--card-shadow);
+  text-align: center;
+}
+
+.balance-card h4 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-size: 1rem;
+  color: var(--text-color);
+}
+
+.balance-card p {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.balance-card.bitcoin h4 {
+  color: var(--bitcoin-color);
+}
+
+.balance-card.ethereum h4 {
+  color: var(--ethereum-color);
+}
+
+.wallets-table-container {
+  overflow-x: auto;
+  background-color: var(--card-background);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+}
+
+.wallets-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wallets-table th,
+.wallets-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.wallets-table th {
+  background-color: var(--table-header-bg);
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.wallets-table tr:last-child td {
+  border-bottom: none;
+}
+
+.wallets-table tr:hover {
+  background-color: var(--table-row-hover);
+}
+
+.address-cell a {
+  color: var(--highlight-color);
+  text-decoration: none;
+}
+
+.address-cell a:hover {
+  text-decoration: underline;
+}
+
+.no-wallets-message {
+  background-color: var(--card-background);
+  border-radius: 10px;
+  padding: 2rem;
+  text-align: center;
+  box-shadow: var(--card-shadow);
+}
+
+.no-wallets-message p {
+  color: var(--text-color-secondary);
+  margin: 0;
+} 

@@ -1,0 +1,99 @@
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  background-color: var(--card-background);
+  color: var(--text-color);
+  padding: 1rem 2rem;
+  box-shadow: var(--card-shadow);
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+  color: var(--text-color);
+}
+
+.nav-links {
+  display: flex;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-links li {
+  margin-right: 1.5rem;
+}
+
+.nav-links a {
+  color: var(--text-color);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.nav-links a:hover {
+  color: var(--highlight-color);
+}
+
+.app-main {
+  flex: 1;
+  padding: 2rem;
+  background-color: var(--background-color);
+}
+
+.app-footer {
+  background-color: var(--card-background);
+  color: var(--text-color);
+  text-align: center;
+  padding: 1rem;
+  margin-top: auto;
+}
+
+.search-container {
+  display: flex;
+  width: 100%;
+  max-width: 500px;
+}
+
+.search-input {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px 0 0 4px;
+  font-size: 14px;
+  outline: none;
+  background-color: var(--card-background);
+  color: var(--text-color);
+}
+
+.search-button {
+  background-color: var(--button-background);
+  color: var(--button-text);
+  border: none;
+  border-radius: 0 4px 4px 0;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.search-button:hover {
+  background-color: var(--highlight-color);
+}
+
+.theme-toggle-container {
+  display: flex;
+  align-items: center;
+} 

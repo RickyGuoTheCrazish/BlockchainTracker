@@ -1,0 +1,111 @@
+.search-results-container {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.search-results-container h2 {
+  margin-bottom: 20px;
+  color: var(--text-color);
+}
+
+.no-results {
+  background-color: var(--card-background);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.result-section {
+  margin-bottom: 30px;
+}
+
+.result-section h3 {
+  border-bottom: 2px solid var(--border-color);
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+  font-size: 1.5rem;
+  color: var(--text-color);
+}
+
+.wallets-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.wallet-item {
+  background-color: var(--card-background);
+  border-radius: 8px;
+  padding: 15px;
+  box-shadow: var(--card-shadow);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.wallet-item:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.wallet-item h4 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--text-color);
+}
+
+.wallet-item h4 a {
+  color: var(--highlight-color);
+  text-decoration: none;
+}
+
+.wallet-item h4 a:hover {
+  text-decoration: underline;
+}
+
+.wallet-details {
+  font-size: 0.9rem;
+  color: var(--text-color-secondary);
+}
+
+.wallet-details div {
+  margin-bottom: 5px;
+}
+
+.wallet-details .label {
+  font-weight: 600;
+  margin-right: 5px;
+}
+
+.transactions-table {
+  width: 100%;
+  border-collapse: collapse;
+  box-shadow: var(--card-shadow);
+  background-color: var(--card-background);
+}
+
+.transactions-table th,
+.transactions-table td {
+  padding: 12px 15px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.transactions-table th {
+  background-color: var(--table-header-bg);
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.transactions-table tbody tr:hover {
+  background-color: var(--table-row-hover);
+}
+
+.transactions-table a {
+  color: var(--highlight-color);
+  text-decoration: none;
+}
+
+.transactions-table a:hover {
+  text-decoration: underline;
+} 
