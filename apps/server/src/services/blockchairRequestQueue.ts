@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { env } from '../env.js';
+import { v4 as uuidv4 } from 'uuid';
 
 // Priority levels for different types of requests
 export enum RequestPriority {
@@ -11,6 +12,7 @@ export enum RequestPriority {
 
 // Request item structure
 interface QueueItem<T> {
+  id: string;
   requestFn: () => Promise<T>;
   priority: RequestPriority;
   resolve: (value: T) => void;
@@ -18,6 +20,9 @@ interface QueueItem<T> {
   timestamp: number;
   description: string;
   isCritical?: boolean;
+  status: 'pending' | 'processing' | 'done' | 'error';
+  result?: T;
+  error?: any;
 }
 
 /**
@@ -25,6 +30,7 @@ interface QueueItem<T> {
  * - Manages rate limiting across all API calls
  * - Prioritizes user requests over background tasks
  * - Provides status and monitoring capabilities
+ * - Strictly enforces the 1 request per minute free tier limit
  */
 class BlockchairRequestQueue {
   private queue: Array<QueueItem<any>> = [];
@@ -45,9 +51,14 @@ class BlockchairRequestQueue {
   private globalUserPause = false;
   private globalPauseReason = '';
   private schedulerPaused = false;
+  // Strict rate limit for free tier (60 seconds)
+  private readonly FREE_TIER_RATE_LIMIT_MS = 60000;
+  // Track if a request is scheduled to be sent
+  private requestScheduled = false;
+  private requestStatusMap: Map<string, QueueItem<any>> = new Map();
 
   constructor() {
-    logger.info('Blockchair request queue initialized');
+    logger.info('Blockchair request queue initialized with strict 1 request per minute serialization');
   }
 
   /**
@@ -63,7 +74,8 @@ class BlockchairRequestQueue {
     description: string = 'API Request'
   ): Promise<T> {
     const priority = isUserRequest ? RequestPriority.USER_REQUEST : RequestPriority.SYSTEM_REQUEST;
-    logger.debug(`Adding request to queue: ${description} (priority: ${priority === RequestPriority.USER_REQUEST ? 'USER' : 'SYSTEM'})`);
+    const id = uuidv4();
+    logger.debug(`Adding request to queue: ${description} (priority: ${priority === RequestPriority.USER_REQUEST ? 'USER' : 'SYSTEM'}) [${id}]`);
     
     return new Promise<T>((resolve, reject) => {
       // If we're in exclusive mode, only allow critical requests
@@ -74,22 +86,26 @@ class BlockchairRequestQueue {
       }
       
       // Add request to queue
-      this.queue.push({
+      const item: QueueItem<T> = {
+        id,
         requestFn,
         priority,
         resolve,
         reject,
         timestamp: Date.now(),
         description,
-        isCritical: false  // Regular requests are not critical
-      });
+        isCritical: false,  // Regular requests are not critical
+        status: 'pending',
+      };
+      this.queue.push(item);
+      this.requestStatusMap.set(id, item);
       
       // Sort queue by priority (lower number = higher priority)
       this.sortQueue();
       
       // Start processing if not already running
-      if (!this.processing && !this.paused) {
-        this.processQueue();
+      if (!this.processing && !this.paused && !this.requestScheduled) {
+        this.scheduleNextRequest();
       }
     });
   }
@@ -113,22 +129,27 @@ class BlockchairRequestQueue {
       this.exclusiveRequestId = exclusiveId;
     }
     
+    const id = uuidv4();
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({
+      const item: QueueItem<T> = {
+        id,
         requestFn,
         priority: RequestPriority.CRITICAL_REQUEST,
         resolve,
         reject,
         timestamp: Date.now(),
         description,
-        isCritical: true
-      });
+        isCritical: true,
+        status: 'pending',
+      };
+      this.queue.push(item);
+      this.requestStatusMap.set(id, item);
       
       this.sortQueue();
       
       // Start processing if not already running
-      if (!this.processing && !this.paused) {
-        this.processQueue();
+      if (!this.processing && !this.paused && !this.requestScheduled) {
+        this.scheduleNextRequest();
       }
     });
   }
@@ -176,8 +197,8 @@ class BlockchairRequestQueue {
     logger.info('Exiting exclusive API request mode');
     
     // Resume processing if needed
-    if (this.queue.length > 0 && !this.processing && !this.paused) {
-      this.processQueue();
+    if (this.queue.length > 0 && !this.processing && !this.paused && !this.requestScheduled) {
+      this.scheduleNextRequest();
     }
   }
   
@@ -202,6 +223,7 @@ class BlockchairRequestQueue {
   /**
    * Add a user-initiated critical request that pauses the entire system
    * This is for direct user interactions that should take precedence over everything
+   * But still obeys the 1 request per minute rule
    * @param requestFn The function that makes the actual API call
    * @param description Description of the request for logging
    * @returns Promise that resolves with the API response
@@ -214,38 +236,26 @@ class BlockchairRequestQueue {
     this.setGlobalUserPause(true, description);
     logger.info(`Pausing ALL activity for USER CRITICAL request: ${description}`);
     
-    try {
-      // Skip the queue entirely and process immediately
-      // We don't add to queue, we just execute right away
-      this.lastRequestTime = Date.now();
-      const result = await requestFn();
-      
-      // Reset consecutive errors
-      this.consecutiveErrors = 0;
-      this.currentBackoffTime = this.baseBackoffTime;
-      
-      // Resume system activity
-      this.setGlobalUserPause(false);
-      
-      return result;
-    } catch (error: any) {
-      // Check if this is a rate limit error (430)
-      if (error.message && error.message.includes('430')) {
-        // Increase consecutive errors and apply exponential backoff
-        this.consecutiveErrors++;
-        this.currentBackoffTime = Math.min(
-          this.baseBackoffTime * Math.pow(2, this.consecutiveErrors),
-          this.maxBackoffTime
-        );
-        logger.warn(`Rate limit error detected (430) on USER CRITICAL request. Increasing backoff to ${this.currentBackoffTime}ms`);
+    const id = uuidv4();
+    return new Promise<T>((resolve, reject) => {
+      const item: QueueItem<T> = {
+        id,
+        requestFn,
+        priority: RequestPriority.USER_INITIATED_CRITICAL,
+        resolve,
+        reject,
+        timestamp: Date.now(),
+        description,
+        isCritical: true,
+        status: 'pending',
+      };
+      this.queue.unshift(item); // Always put user critical at the front
+      this.requestStatusMap.set(id, item);
+      this.sortQueue();
+      if (!this.processing && !this.paused && !this.requestScheduled) {
+        this.scheduleNextRequest();
       }
-      
-      // Resume system activity even on error
-      this.setGlobalUserPause(false);
-      
-      logger.error(`Error in user critical request: ${description}`, error);
-      throw error;
-    }
+    });
   }
   
   /**
@@ -263,9 +273,44 @@ class BlockchairRequestQueue {
       this.globalPauseReason = '';
       
       // Resume queue processing if needed
-      if (this.queue.length > 0 && !this.processing && !this.paused) {
-        this.processQueue();
+      if (this.queue.length > 0 && !this.processing && !this.paused && !this.requestScheduled) {
+        this.scheduleNextRequest();
       }
+    }
+  }
+  
+  /**
+   * Schedule the next API request strictly every 60 seconds
+   */
+  private scheduleNextRequest(): void {
+    if (this.requestScheduled) return;
+    if (this.globalUserPause) return;
+    if (this.queue.length === 0 || this.paused) return;
+    this.requestScheduled = true;
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    const waitTime = Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+    setTimeout(() => {
+      this.requestScheduled = false;
+      this.processQueue();
+    }, waitTime);
+  }
+  
+  /**
+   * Helper to get a string representation of priority
+   */
+  private getPriorityTypeString(priority: RequestPriority): string {
+    switch(priority) {
+      case RequestPriority.USER_INITIATED_CRITICAL:
+        return 'USER CRITICAL';
+      case RequestPriority.CRITICAL_REQUEST:
+        return 'CRITICAL';
+      case RequestPriority.USER_REQUEST:
+        return 'USER';
+      case RequestPriority.SYSTEM_REQUEST:
+        return 'SYSTEM';
+      default:
+        return 'UNKNOWN';
     }
   }
   
@@ -303,50 +348,29 @@ class BlockchairRequestQueue {
    * Process the next request in the queue
    */
   private async processQueue(): Promise<void> {
-    // Don't process if there's a global user pause
     if (this.globalUserPause) {
-      logger.debug(`Queue processing blocked due to GLOBAL PAUSE (${this.globalPauseReason})`);
       this.processing = false;
       return;
     }
-    
     if (this.queue.length === 0 || this.paused) {
       this.processing = false;
       return;
     }
-    
     this.processing = true;
-    
-    // Respect rate limit with potential backoff
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    const waitTime = Math.max(this.currentBackoffTime, env.API_THROTTLE_MS - timeSinceLastRequest);
-    
-    if (waitTime > 0) {
-      logger.debug(`Throttling API call, waiting ${waitTime}ms (backoff: ${this.currentBackoffTime}ms)`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-    
-    // Take the next request (highest priority first)
     const item = this.queue.shift();
-    
     if (item) {
+      item.status = 'processing';
+      this.lastRequestTime = Date.now();
       try {
-        let priorityType = 'SYSTEM';
-        if (item.priority === RequestPriority.USER_REQUEST) priorityType = 'USER';
-        if (item.priority === RequestPriority.CRITICAL_REQUEST) priorityType = 'CRITICAL';
+        const priorityType = this.getPriorityTypeString(item.priority);
         
         logger.debug(`Processing ${priorityType} request: ${item.description} (waited ${(Date.now() - item.timestamp)/1000}s)`);
-        this.lastRequestTime = Date.now();
         
         // Execute the request
         const result = await item.requestFn();
         
-        // Request succeeded, reset backoff
-        this.consecutiveErrors = 0;
-        this.currentBackoffTime = this.baseBackoffTime;
-        
-        // Resolve the promise
+        item.status = 'done';
+        item.result = result;
         item.resolve(result);
         this.totalProcessed++;
         
@@ -357,22 +381,22 @@ class BlockchairRequestQueue {
           // We'll keep exclusive mode on until explicitly turned off
         }
         
-        // Process next request after a short delay to update lastRequestTime
-        setTimeout(() => this.processQueue(), 10);
+        // Schedule the next request if there are any in the queue
+        if (this.queue.length > 0) {
+          this.scheduleNextRequest();
+        } else {
+          this.processing = false;
+        }
       } catch (error: any) {
-        logger.error(`Error processing queued request: ${item.description}`, error);
+        item.status = 'error';
+        item.error = error;
         item.reject(error);
         this.totalErrors++;
         
-        // Check if this is a rate limit error (430)
+        // Enhanced rate limit violation logging
         if (error.message && error.message.includes('430')) {
-          // Increase consecutive errors and apply exponential backoff
-          this.consecutiveErrors++;
-          this.currentBackoffTime = Math.min(
-            this.baseBackoffTime * Math.pow(2, this.consecutiveErrors),
-            this.maxBackoffTime
-          );
-          logger.warn(`Rate limit error detected (430). Increasing backoff to ${this.currentBackoffTime}ms. Consecutive errors: ${this.consecutiveErrors}`);
+          const nextAllowed = new Date(this.lastRequestTime + this.FREE_TIER_RATE_LIMIT_MS);
+          logger.error(`\n[RATE LIMIT VIOLATION] Blockchair free-tier limit hit!\n  Request: ${item.description}\n  Queue length: ${this.queue.length}\n  Next allowed request: ${nextAllowed.toISOString()}\n  Error: ${error.message}\n`);
         }
         
         // If this was the exclusive request we were waiting for, exit exclusive mode
@@ -383,8 +407,12 @@ class BlockchairRequestQueue {
           // We'll keep exclusive mode on until explicitly turned off
         }
         
-        // Continue processing the queue even if this request failed
-        setTimeout(() => this.processQueue(), 10);
+        // Schedule the next request with a delay if there are any in the queue
+        if (this.queue.length > 0) {
+          this.scheduleNextRequest();
+        } else {
+          this.processing = false;
+        }
       }
     } else {
       this.processing = false;
@@ -406,8 +434,8 @@ class BlockchairRequestQueue {
     this.paused = false;
     logger.info('Blockchair request queue resumed');
     
-    if (this.queue.length > 0 && !this.processing) {
-      this.processQueue();
+    if (this.queue.length > 0 && !this.processing && !this.requestScheduled) {
+      this.scheduleNextRequest();
     }
   }
   
@@ -425,6 +453,8 @@ class BlockchairRequestQueue {
       globalUserPauseReason: this.globalPauseReason,
       schedulerPaused: this.schedulerPaused,
       lastRequestTime: this.lastRequestTime,
+      timeSinceLastRequest: `${Math.round((Date.now() - this.lastRequestTime) / 1000)}s`,
+      timeUntilNextAllowed: `${Math.max(0, Math.round((this.FREE_TIER_RATE_LIMIT_MS - (Date.now() - this.lastRequestTime)) / 1000))}s`,
       totalProcessed: this.totalProcessed,
       totalErrors: this.totalErrors,
       criticalRequestCount: this.queue.filter(item => item.priority === RequestPriority.CRITICAL_REQUEST).length,
@@ -435,7 +465,8 @@ class BlockchairRequestQueue {
         currentBackoffTime: this.currentBackoffTime,
       },
       oldestRequest: this.queue.length > 0 ? 
-        Math.round((Date.now() - Math.min(...this.queue.map(item => item.timestamp))) / 1000) + 's ago' : 'none'
+        Math.round((Date.now() - Math.min(...this.queue.map(item => item.timestamp))) / 1000) + 's ago' : 'none',
+      requestScheduled: this.requestScheduled
     };
   }
   
@@ -444,6 +475,47 @@ class BlockchairRequestQueue {
    */
   isExclusiveMode(): boolean {
     return this.exclusiveMode;
+  }
+  
+  /**
+   * Returns the estimated time until the next request can be made
+   */
+  getTimeUntilNextRequest(): number {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    return Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+  }
+
+  /**
+   * Get the estimated wait time (ms) for a new request added now
+   */
+  getEstimatedWaitTime(): number {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    const queueLength = this.queue.length;
+    const baseWait = Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+    return baseWait + queueLength * this.FREE_TIER_RATE_LIMIT_MS;
+  }
+
+  /**
+   * Get the estimated wait time (ms) for a specific request ID
+   */
+  getEstimatedWaitTimeForRequest(id: string): number | null {
+    const item = this.requestStatusMap.get(id);
+    if (!item) return null;
+    const index = this.queue.findIndex(q => q.id === id);
+    if (index === -1) return 0; // Already processing or done
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    const baseWait = Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+    return baseWait + index * this.FREE_TIER_RATE_LIMIT_MS;
+  }
+
+  /**
+   * Get the status of a request by ID
+   */
+  getRequestStatus(id: string): QueueItem<any> | undefined {
+    return this.requestStatusMap.get(id);
   }
 }
 

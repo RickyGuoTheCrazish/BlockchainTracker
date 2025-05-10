@@ -33,6 +33,7 @@ export const env: Env = {
   PORT: parseInt(process.env.PORT || '8000', 10),
   DATABASE_URL: process.env.DATABASE_URL || (isDev ? 'postgres://postgres:postgres@localhost:5432/blockchain' : ''),
   NODE_ENV: (process.env.NODE_ENV as Env['NODE_ENV']) || 'development',
-  API_THROTTLE_MS: parseInt(process.env.API_THROTTLE_MS || '60000', 10),
+  // Enforce free tier rate limit of 1 request per minute (60000ms)
+  API_THROTTLE_MS: 60000, // Blockchair free tier limit - 1 request per minute
   MAX_TRANSACTIONS: parseInt(process.env.MAX_TRANSACTIONS || '100', 10),
 }; 

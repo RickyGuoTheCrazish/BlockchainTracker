@@ -29,62 +29,55 @@ let statsFetchingTask: cron.ScheduledTask | null = null;
 
 /**
  * Initialize the scheduler for periodic data fetching
+ * Uses the queue's rate limiting to ensure only one request per minute is sent to Blockchair
  */
 export function initScheduler() {
-  logger.info('Initializing scheduler for periodic data fetching');
-  
-  // Delay initial stats fetching to avoid immediate API load at startup
-  setTimeout(() => {
-    logger.info('Executing initial stats fetch after startup delay');
-    fetchAndStoreStats()
-      .catch(error => {
-        logger.error('Initial stats fetch failed:', error);
-      });
-    
-    // Schedule regular stats fetching every 60 seconds (1 minute)
-    // But first check if system is paused
+  logger.info('Initializing scheduler for periodic data fetching (strict 1 request per minute enforced by queue)');
+  setTimeout(async () => {
+    logger.info('Fetching initial stats from DATABASE ONLY after startup delay');
+    try {
+      const latestStats = await db.select()
+        .from(stats)
+        .orderBy(desc(stats.timestamp))
+        .limit(1);
+      if (latestStats.length > 0) {
+        logger.info('Initial stats loaded from database:', latestStats[0]);
+      } else {
+        logger.warn('No stats found in database on startup');
+      }
+    } catch (error) {
+      logger.error('Initial stats DB fetch failed:', error);
+    }
+    // Schedule stats fetching every minute (real Blockchair API call, queued)
     statsFetchingTask = cron.schedule('*/1 * * * *', async () => {
       try {
-        // Skip if system is paused or the scheduler is paused
         if (blockchairQueue.isGloballyPaused() || blockchairQueue.isSchedulerPaused()) {
           logger.info('Skipping scheduled stats fetch due to system pause');
           return;
         }
-        
-        // Check if anyone is actually viewing the homepage/dashboard
-        // Only fetch if there are active users on the homepage or dashboard
-        // The isPageActive method now handles checking both 'home' and 'dashboard'
         if (!pageTracker.isPageActive('home')) {
-          logger.info('Skipping stats fetch as no users are viewing the homepage/dashboard');
+          logger.info('Skipping stats fetch as no users are viewing the homepage');
           return;
         }
-        
-        logger.info('Fetching stats as users are viewing the homepage/dashboard');
+        logger.info('Queueing stats fetch as users are viewing the homepage');
         await fetchAndStoreStats();
       } catch (error) {
         logger.error('Scheduled stats fetch failed:', error);
       }
     });
   }, 10000);
-  
-  // Schedule background transactions fetching less frequently (every 5 minutes)
-  // This gives priority to user-initiated requests
+  // Schedule transaction fetching every 5 minutes
   transactionFetchingTask = cron.schedule('*/5 * * * *', async () => {
     try {
-      // Skip if system is paused or the scheduler is paused
       if (blockchairQueue.isGloballyPaused() || blockchairQueue.isSchedulerPaused()) {
         logger.info('Skipping scheduled transaction fetch due to system pause');
         return;
       }
-      
-      // Check if anyone is actually viewing the transactions page
-      // Only fetch if there are active users on the transactions page
       if (!pageTracker.isPageActive('transactions')) {
         logger.info('Skipping transactions fetch as no users are viewing the transactions page');
         return;
       }
-      
-      logger.debug('Background transaction fetch scheduled - users are on transactions page');
+      logger.debug('Queueing background transaction fetch - users are on transactions page');
       await fetchAndStoreTransactions(false);
     } catch (error) {
       logger.error('Background transaction fetch failed:', error);
@@ -97,6 +90,14 @@ export function initScheduler() {
  */
 export async function triggerTransactionFetch() {
   logger.debug('Manually triggering user-initiated transaction fetch');
+  
+  // Check if we're within rate limits before proceeding
+  const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+  if (timeUntilNextAllowed > 0) {
+    logger.info(`Delaying user-initiated transaction fetch for ${Math.round(timeUntilNextAllowed/1000)}s due to free tier rate limit`);
+    await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 500)); // Add buffer
+  }
+  
   await fetchAndStoreTransactions(true);
 }
 
@@ -110,9 +111,14 @@ export function scheduleDelayedTransactionFetch() {
     clearTimeout(delayedFetchTimeout);
   }
   
-  logger.debug('Scheduling delayed transaction fetch (1 minute delay)');
+  // Calculate how long we should wait based on rate limits
+  // We wait at least 60 seconds, but longer if needed for rate limiting
+  const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+  const delayTime = Math.max(60000, timeUntilNextAllowed + 1000);
   
-  // Set a new timeout for 1 minute (60000 ms)
+  logger.debug(`Scheduling delayed transaction fetch (${Math.round(delayTime/1000)}s delay, respecting rate limits)`);
+  
+  // Set a new timeout
   delayedFetchTimeout = setTimeout(async () => {
     // Skip if system is paused
     if (blockchairQueue.isGloballyPaused() || blockchairQueue.isSchedulerPaused()) {
@@ -120,10 +126,10 @@ export function scheduleDelayedTransactionFetch() {
       return;
     }
     
-    logger.debug('Executing delayed transaction fetch after 1 minute wait');
+    logger.debug(`Executing delayed transaction fetch after ${Math.round(delayTime/1000)}s wait`);
     await fetchAndStoreTransactions(true);
     delayedFetchTimeout = null;
-  }, 60000);
+  }, delayTime);
 }
 
 /**
@@ -199,15 +205,39 @@ async function fetchAndStoreTransactions(isUserRequest: boolean = false) {
   try {
     logger.debug(`Fetching recent transactions (user-initiated: ${isUserRequest})`);
     
+    // Calculate how many transactions to fetch from each blockchain
+    // Reducing the total number helps minimize API calls for details later
+    const limit = 5; // Reduced from env.MAX_TRANSACTIONS/2 to minimize API calls
+    
     // Fetch Bitcoin transactions (with proper priority flag)
-    const btcTxData = await fetchRecentBitcoinTransactions(env.MAX_TRANSACTIONS / 2);
+    const btcTxData = await fetchRecentBitcoinTransactions(limit);
     if (btcTxData && btcTxData.data) {
-      for (const tx of Object.values(btcTxData.data) as any[]) {
+      const txList = Object.values(btcTxData.data) as any[];
+      // Use only the first few to reduce API calls
+      for (let i = 0; i < Math.min(txList.length, limit); i++) {
+        const tx = txList[i];
         if (!tx.hash) continue;
         
-        // First, try to get the transaction details with inputs/outputs
         try {
-          // Pass the isUserRequest flag down to the API call
+          // Check if we need to insert this transaction at all
+          const existingTx = await db.select()
+            .from(transactions)
+            .where(eq(transactions.hash, tx.hash))
+            .limit(1);
+            
+          if (existingTx.length > 0) {
+            logger.debug(`Transaction ${tx.hash} already exists, skipping detailed fetch to save API calls`);
+            continue;
+          }
+        
+          // Check rate limits before fetching details - only fetch if we're within limits
+          const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+          if (timeUntilNextAllowed > 0) {
+            logger.info(`Deferring transaction detail fetch for ${Math.round(timeUntilNextAllowed/1000)}s due to free tier rate limit`);
+            await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 500));
+          }
+          
+          // Now fetch details
           const txDetails = await fetchTransactionByHash('bitcoin', tx.hash, isUserRequest);
           
           if (txDetails && txDetails.data && txDetails.data[tx.hash]) {
@@ -263,13 +293,41 @@ async function fetchAndStoreTransactions(isUserRequest: boolean = false) {
       }
     }
     
+    // Check rate limit before fetching Ethereum transactions
+    const timeBeforeEthFetch = blockchairQueue.getTimeUntilNextRequest();
+    if (timeBeforeEthFetch > 0) {
+      logger.info(`Waiting ${Math.round(timeBeforeEthFetch/1000)}s before fetching ETH transactions due to rate limit`);
+      await new Promise(resolve => setTimeout(resolve, timeBeforeEthFetch + 500));
+    }
+    
     // Fetch Ethereum transactions (with proper priority flag)
-    const ethTxData = await fetchRecentEthereumTransactions(env.MAX_TRANSACTIONS / 2);
+    const ethTxData = await fetchRecentEthereumTransactions(limit);
     if (ethTxData && ethTxData.data) {
-      for (const tx of Object.values(ethTxData.data) as any[]) {
+      const txList = Object.values(ethTxData.data) as any[];
+      // Use only the first few to reduce API calls
+      for (let i = 0; i < Math.min(txList.length, limit); i++) {
+        const tx = txList[i];
         if (!tx.hash) continue;
         
         try {
+          // Check if we need to insert this transaction at all
+          const existingTx = await db.select()
+            .from(transactions)
+            .where(eq(transactions.hash, tx.hash))
+            .limit(1);
+            
+          if (existingTx.length > 0) {
+            logger.debug(`Transaction ${tx.hash} already exists, skipping detailed fetch to save API calls`);
+            continue;
+          }
+          
+          // Check rate limits before fetching details
+          const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+          if (timeUntilNextAllowed > 0) {
+            logger.info(`Deferring ETH transaction detail fetch for ${Math.round(timeUntilNextAllowed/1000)}s due to free tier rate limit`);
+            await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 500));
+          }
+          
           // Pass the isUserRequest flag down to the API call
           const txDetails = await fetchTransactionByHash('ethereum', tx.hash, isUserRequest);
           

@@ -35,15 +35,8 @@ const HomePage = () => {
 
   // Track page visit for backend optimization
   useEffect(() => {
-    // Register both 'home' and 'dashboard' since they are equivalent
-    // This ensures that if the scheduler checks for either, it will know users are viewing this page
-    const cleanupHome = usePageTracking('home');
-    const cleanupDashboard = usePageTracking('dashboard');
-    
-    return () => {
-      cleanupHome();
-      cleanupDashboard();
-    };
+    const cleanup = usePageTracking('home');
+    return cleanup;
   }, []);
 
   // DON'T automatically connect to SSE or refresh data

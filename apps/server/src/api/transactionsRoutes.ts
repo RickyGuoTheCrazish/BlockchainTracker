@@ -3,18 +3,33 @@ import { db } from '../db/index.js';
 import { transactions } from '../db/schema/transactions.js';
 import { logger } from '../utils/logger.js';
 import { desc, eq, sql } from 'drizzle-orm';
-import { fetchTransactionByHash, extractSenderAddress, extractReceiverAddress } from '../services/blockchairApi.js';
+import { fetchTransactionByHash, extractSenderAddress, extractReceiverAddress, getEstimatedWaitTimeForNewRequest, getEstimatedWaitTimeForRequest, getRequestStatus } from '../services/blockchairApi.js';
 import { triggerTransactionFetch } from '../services/scheduler.js';
+import { blockchairQueue } from '../services/blockchairRequestQueue.js';
 
 const router = express.Router();
 
 /**
  * POST /api/transactions/refresh
  * Manually trigger a transaction refresh with user priority
+ * Respects free tier rate limit (1 request per minute)
  */
 router.post('/refresh', async (req, res) => {
   try {
     logger.info('Manual transaction refresh requested by user');
+    
+    // Check if we're within rate limits
+    const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+    if (timeUntilNextAllowed > 0) {
+      logger.warn(`Manual transaction refresh requested but within rate limit cooldown (${Math.round(timeUntilNextAllowed/1000)}s remaining)`);
+      
+      return res.json({
+        success: false,
+        rate_limited: true,
+        message: `Transaction refresh not possible due to API rate limits. Next API request allowed in ${Math.round(timeUntilNextAllowed/1000)} seconds.`,
+        time_until_next_allowed: Math.round(timeUntilNextAllowed/1000)
+      });
+    }
     
     // This will execute with user priority
     await triggerTransactionFetch();
@@ -146,85 +161,47 @@ router.get('/recent', async (req, res) => {
 });
 
 /**
+ * GET /api/transactions/status/:requestId
+ * Get the status of a pending transaction request by request ID
+ */
+router.get('/status/:requestId', async (req, res) => {
+  const { requestId } = req.params;
+  const status = getRequestStatus(requestId);
+  if (!status) {
+    return res.status(404).json({ error: 'Request not found' });
+  }
+  res.json({
+    status: status.status,
+    result: status.result,
+    error: status.error,
+    estimated_wait_ms: getEstimatedWaitTimeForRequest(requestId)
+  });
+});
+
+/**
  * GET /api/transactions/:hash
  * Fetch a specific transaction by hash
  */
 router.get('/:hash', async (req, res) => {
   try {
     const { hash } = req.params;
-    
     // First check our database
     const existingTx = await db.select()
       .from(transactions)
       .where(eq(transactions.hash, hash))
       .limit(1);
-    
     if (existingTx.length > 0) {
       return res.json(existingTx[0]);
     }
-    
-    // If not in database, try to fetch from Blockchair API
-    // First, determine if it's a Bitcoin or Ethereum hash
-    // This is a simplification - in reality we might need a more robust way
+    // If not in database, queue a request and return pending status
+    // Determine chain type for API call
     const chain = hash.length >= 64 ? 'ethereum' : 'bitcoin';
-    
-    const txData = await fetchTransactionByHash(chain, hash);
-    
-    if (!txData || !txData.data) {
-      return res.status(404).json({ error: 'Transaction not found' });
-    }
-    
-    // Format and return the transaction data
-    const txDetails = Object.values(txData.data)[0] as any;
-    
-    // Validate timestamp before creating Date object
-    let blockTime;
-    try {
-      blockTime = txDetails.time && !isNaN(txDetails.time) ? new Date(txDetails.time * 1000) : new Date();
-    } catch (e) {
-      // In case of invalid date, use current time
-      blockTime = new Date();
-      logger.warn(`Invalid timestamp for transaction ${hash}, using current time`);
-    }
-    
-    // Insert into database for future queries
-    try {
-      const chainType = chain === 'bitcoin' ? 'bitcoin' : 'ethereum';
-      await db.insert(transactions).values({
-        hash,
-        chain: chain === 'bitcoin' ? 'BTC' : 'ETH',
-        block_number: txDetails.block_id || null,
-        block_time: blockTime,
-        value: String(txDetails.output_total || txDetails.value || '0'),
-        fee: String(txDetails.fee || '0'),
-        sender: extractSenderAddress(txDetails, chainType),
-        receiver: extractReceiverAddress(txDetails, chainType),
-        status: txDetails.block_id ? 'confirmed' : 'pending',
-        raw_payload: txDetails,
-      });
-      logger.debug(`Inserted transaction ${hash} into database`);
-    } catch (error: any) {
-      // Handle possible race condition where transaction was inserted after our check
-      if (error.message?.includes('duplicate key value violates unique constraint')) {
-        logger.debug(`Transaction ${hash} was inserted by another process`);
-      } else {
-        // Log but continue - we still want to return the transaction data to the client
-        logger.error(`Error inserting transaction ${hash}`, error);
-      }
-    }
-    
-    const chainType = chain === 'bitcoin' ? 'bitcoin' : 'ethereum';
-    res.json({
-      hash,
-      chain: chain === 'bitcoin' ? 'BTC' : 'ETH',
-      block_number: txDetails.block_id,
-      block_time: blockTime,
-      value: txDetails.output_total || txDetails.value,
-      fee: txDetails.fee,
-      sender: extractSenderAddress(txDetails, chainType),
-      receiver: extractReceiverAddress(txDetails, chainType),
-      status: txDetails.block_id ? 'confirmed' : 'pending',
-      raw_payload: txDetails,
+    const requestPromise = fetchTransactionByHash(chain, hash);
+    const estimatedWait = getEstimatedWaitTimeForNewRequest();
+    res.status(202).json({
+      status: 'pending',
+      message: 'Transaction data is being fetched from Blockchair. Please poll the status endpoint for updates.',
+      estimated_wait_ms: estimatedWait
     });
   } catch (error) {
     logger.error(`Error fetching transaction ${req.params.hash}`, error);

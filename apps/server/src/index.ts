@@ -13,6 +13,7 @@ import walletsRoutes from './api/walletsRoutes.js';
 import searchRoutes from './api/searchRoutes.js';
 import sseRoutes from './api/sseRoutes.js';
 import statsEventsRoutes from './api/routes/stats.js';
+import pageTrackerRoutes from './api/pageTrackerRoutes.js';
 
 async function startServer() {
   logger.info('Starting Blockchain Tracker server...');
@@ -47,7 +48,8 @@ async function startServer() {
         '/api/wallets',
         '/api/search',
         '/api/sse',
-        '/api/events/stats'
+        '/api/events/stats',
+        '/api/page-tracker'
       ],
       docs: '/api-docs'
     });
@@ -60,6 +62,7 @@ async function startServer() {
   app.use('/api/search', searchRoutes);
   app.use('/api/sse', sseRoutes);
   app.use('/api/events/stats', statsEventsRoutes);
+  app.use('/api/page-tracker', pageTrackerRoutes);
 
   // Health check
   app.get('/health', (req, res) => {

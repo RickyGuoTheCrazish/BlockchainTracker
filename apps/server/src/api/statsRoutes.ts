@@ -4,7 +4,7 @@ import { stats } from '../db/schema/stats.js';
 import { logger } from '../utils/logger.js';
 import { desc, sql } from 'drizzle-orm';
 import { blockchairQueue } from '../services/blockchairRequestQueue.js';
-import { fetchDashboardStats } from '../services/blockchairApi.js';
+import { fetchDashboardStats, getEstimatedWaitTimeForNewRequest, getEstimatedWaitTimeForRequest, getRequestStatus } from '../services/blockchairApi.js';
 import { pauseScheduler, resumeScheduler } from '../services/scheduler.js';
 
 const router = express.Router();
@@ -106,99 +106,41 @@ router.get('/queue', (req, res) => {
 });
 
 /**
+ * GET /api/stats/status/:requestId
+ * Get the status of a pending stats request by request ID
+ */
+router.get('/status/:requestId', async (req, res) => {
+  const { requestId } = req.params;
+  const status = getRequestStatus(requestId);
+  if (!status) {
+    return res.status(404).json({ error: 'Request not found' });
+  }
+  res.json({
+    status: status.status,
+    result: status.result,
+    error: status.error,
+    estimated_wait_ms: getEstimatedWaitTimeForRequest(requestId)
+  });
+});
+
+/**
  * POST /api/stats/refresh
  * Force a refresh of the blockchain stats with maximum priority
+ * Respects free tier rate limit (1 request per minute)
  */
 router.post('/refresh', async (req, res) => {
   try {
     logger.info('Manually refreshing blockchain stats with USER CRITICAL priority');
-    
-    // Pause all scheduled tasks
-    pauseScheduler();
-    
-    try {
-      // Temporarily pause other requests for this critical operation
-      blockchairQueue.enterExclusiveMode(true);
-      
-      // Fetch fresh data with critical priority
-      const statsData = await blockchairQueue.addUserCriticalRequest(
-        async () => {
-          logger.info('Executing user-critical stats refresh');
-          const response = await fetch('https://api.blockchair.com/stats');
-          
-          if (!response.ok) {
-            throw new Error(`API error: ${response.status} ${response.statusText}`);
-          }
-          
-          return await response.json();
-        },
-        'USER CRITICAL stats refresh'
-      );
-      
-      if (!statsData || !statsData.data) {
-        throw new Error('Invalid response from Blockchair API');
-      }
-      
-      // Extract stats from the response
-      const btcData = statsData.data.bitcoin?.data || {};
-      const ethData = statsData.data.ethereum?.data || {};
-      
-      // Store in database
-      const newStats = {
-        bitcoin_blocks: btcData.blocks || 0,
-        bitcoin_hashrate: btcData.hashrate_24h || 0,
-        bitcoin_mempool_transactions: btcData.mempool_transactions || 0,
-        bitcoin_market_price_usd: btcData.market_price_usd || 0,
-        ethereum_blocks: ethData.blocks || 0,
-        ethereum_hashrate: ethData.hashrate_24h || 0,
-        ethereum_mempool_transactions: ethData.mempool_transactions || 0,
-        ethereum_market_price_usd: ethData.market_price_usd || 0,
-        timestamp: new Date(),
-        raw_payload: statsData
-      };
-      
-      await db.insert(stats).values(newStats);
-      
-      // Exit exclusive mode
-      blockchairQueue.exitExclusiveMode();
-      
-      // Resume scheduler
-      resumeScheduler();
-      
-      // Return success with the fresh data
-      return res.json({ 
-        success: true, 
-        data: newStats,
-        message: 'Stats refreshed successfully'
-      });
-      
-    } catch (error) {
-      // Make sure to exit exclusive mode on error
-      blockchairQueue.exitExclusiveMode();
-      
-      // Resume scheduler on error
-      resumeScheduler();
-      
-      logger.error('Error in critical stats refresh', error);
-      
-      // Get the latest data from database to return
-      const latestStats = await db.select()
-        .from(stats)
-        .orderBy(desc(stats.timestamp))
-        .limit(1);
-        
-      if (latestStats.length > 0) {
-        // Return cached data with error info
-        return res.json({
-          success: false,
-          data: latestStats[0],
-          error: 'API request failed, returning cached data',
-          cached: true
-        });
-      }
-      
-      throw error; // Re-throw if no cached data available
-    }
+    // Check if we're within rate limits
+    // Instead of waiting, queue the request and return pending status
+    const estimatedWait = getEstimatedWaitTimeForNewRequest();
+    // Queue the request (the actual fetch will be handled by the queue)
+    const requestPromise = fetchDashboardStats();
+    res.status(202).json({
+      status: 'pending',
+      message: 'Stats refresh is being processed. Please poll the status endpoint for updates.',
+      estimated_wait_ms: estimatedWait
+    });
   } catch (error) {
     logger.error('Error refreshing stats', error);
     res.status(500).json({ error: 'Failed to refresh stats' });

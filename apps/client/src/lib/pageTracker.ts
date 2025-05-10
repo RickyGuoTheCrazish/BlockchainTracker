@@ -13,6 +13,7 @@ const sessionId = 'user-' + Math.random().toString(36).substring(2, 9);
  * @param pageType Type of page being viewed ('home', 'transactions', 'wallet', etc)
  */
 export const enterPage = (pageType: string): void => {
+  console.log(`🔍 Tracking: User entered '${pageType}' page`);
   fetch(`${API_BASE_URL}/page-tracker/enter`, {
     method: 'POST',
     headers: {
@@ -22,7 +23,15 @@ export const enterPage = (pageType: string): void => {
       pageType,
       userId: sessionId
     }),
-  }).catch(err => console.error(`Failed to notify entry to ${pageType} page:`, err));
+  })
+  .then(response => {
+    if (!response.ok) {
+      console.error(`Failed to notify entry to ${pageType} page: Server responded with ${response.status}`);
+    } else {
+      console.log(`✅ Successfully tracked entry to '${pageType}' page`);
+    }
+  })
+  .catch(err => console.error(`❌ Failed to notify entry to ${pageType} page:`, err));
 };
 
 /**
@@ -30,6 +39,7 @@ export const enterPage = (pageType: string): void => {
  * @param pageType Type of page being left ('home', 'transactions', 'wallet', etc)
  */
 export const leavePage = (pageType: string): void => {
+  console.log(`🔍 Tracking: User left '${pageType}' page`);
   fetch(`${API_BASE_URL}/page-tracker/leave`, {
     method: 'POST',
     headers: {
@@ -39,7 +49,13 @@ export const leavePage = (pageType: string): void => {
       pageType,
       userId: sessionId
     }),
-  }).catch(err => console.error(`Failed to notify exit from ${pageType} page:`, err));
+  })
+  .then(response => {
+    if (!response.ok) {
+      console.error(`Failed to notify exit from ${pageType} page: Server responded with ${response.status}`);
+    }
+  })
+  .catch(err => console.error(`❌ Failed to notify exit from ${pageType} page:`, err));
 };
 
 /**

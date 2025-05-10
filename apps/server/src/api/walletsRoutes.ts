@@ -6,9 +6,13 @@ import { logger } from '../utils/logger.js';
 import { desc, eq, or } from 'drizzle-orm';
 import { 
   fetchWalletByAddress, 
-  fetchWalletByAddressUserCritical
+  fetchWalletByAddressUserCritical,
+  getEstimatedWaitTimeForNewRequest,
+  getEstimatedWaitTimeForRequest,
+  getRequestStatus
 } from '../services/blockchairApi.js';
 import { pauseScheduler, resumeScheduler } from '../services/scheduler.js';
+import { blockchairQueue } from '../services/blockchairRequestQueue.js';
 
 const router = express.Router();
 
@@ -216,81 +220,21 @@ router.get('/:address', async (req, res) => {
       return;
     }
     
-    // CASE 2: Wallet not in cache but we have transactions - create basic record
-    if (walletTransactions.length > 0) {
-      logger.info(`Wallet ${address} not found, but has ${walletTransactions.length} transactions - creating basic record`);
-      
-      const basicWallet = await createBasicWalletFromTransactions(address, walletTransactions);
-      res.json(basicWallet);
-      
-      // Check if this address has recently failed before trying to update
-      const lastFailedTime = recentFailedRefreshes.get(address);
-      if (!lastFailedTime || Date.now() - lastFailedTime > FAILED_REFRESH_COOLDOWN) {
-        backgroundRefreshWallet(address, 'medium')
-          .catch(err => logger.debug(`Background fetch error: ${err.message}`));
-      }
-      
-      return;
-    }
-    
-    // CASE 3: No wallet record and no transactions - check if recently failed before direct API fetch
-    const lastFailedTime = recentFailedRefreshes.get(address);
-    if (lastFailedTime && Date.now() - lastFailedTime < FAILED_REFRESH_COOLDOWN) {
-      // If recently failed, return a descriptive error rather than hitting API again
-      logger.info(`Skipping API fetch for ${address} due to recent failure (${Math.round((Date.now() - lastFailedTime)/1000)}s ago)`);
-      return res.status(503).json({ 
-        error: 'API services temporarily unavailable',
-        message: 'Could not fetch wallet data due to recent API errors. Please try again later.',
-        is_rate_limited: true
-      });
-    }
-    
-    // Otherwise proceed with API fetch
-    logger.info(`Wallet ${address} not found in database - fetching from API with user-critical priority`);
-    
-    try {
-      const walletData = await fetchWalletWithCriticalPriority(address);
-      
-      if (!walletData || !walletData.data) {
-        return res.status(404).json({ error: 'Wallet not found' });
-      }
-      
-      // Extract wallet details and store in database
-      const walletDetails = Object.values(walletData.data)[0] as any;
-      const chainType = getChainType(address);
-      
-      const newWallet = {
-        address,
-        chain: getChainCode(chainType),
-        first_seen: new Date(),
-        last_seen: new Date(),
-        balance: String(walletDetails.address?.balance || '0'),
-        transaction_count: walletDetails.address?.transaction_count || 0,
-        raw_payload: walletData
-      };
-      
-      await db.insert(wallets).values(newWallet);
-      logger.info(`New wallet record created for ${address} from API`);
-      
-      // Remove from failed refreshes if present
-      recentFailedRefreshes.delete(address);
-      
-      return res.json({
-        ...newWallet,
-        transactions: walletTransactions,
-        from_api: true
-      });
-    } catch (apiError: any) {
-      // Record the failure time
-      recentFailedRefreshes.set(address, Date.now());
-      
-      logger.error(`Error fetching wallet data from API for ${address}`, apiError);
-      
-      return res.status(500).json({ 
-        error: 'API request failed',
-        message: 'Could not fetch wallet data. Please try again later.'
-      });
-    }
+    // CASE 2: Wallet not in cache - queue a request and return pending status
+    logger.info(`Wallet ${address} not found in database - queueing fetch from API`);
+    const chainType = getChainType(address);
+    const requestPromise = fetchWalletByAddress(chainType, address, true);
+    // Get the estimated wait time for this request
+    const estimatedWait = getEstimatedWaitTimeForNewRequest();
+    // Generate a request ID for status polling
+    // (The queue will assign a unique ID, but we can't get it synchronously here; so we recommend polling the status endpoint for updates)
+    res.status(202).json({
+      status: 'pending',
+      message: 'Wallet data is being fetched from Blockchair. Please poll the status endpoint for updates.',
+      estimated_wait_ms: estimatedWait
+    });
+    // Optionally, you could store the request ID in a DB or cache for the client to poll
+    // (For now, the client can poll /api/wallets/:address/status/:requestId)
   } catch (error) {
     logger.error(`Error fetching wallet ${req.params.address}`, error);
     res.status(500).json({ error: 'Failed to fetch wallet information' });
@@ -335,6 +279,7 @@ router.post('/:address/label', async (req, res) => {
 /**
  * POST /api/wallets/:address/refresh
  * Force refresh wallet data with absolute top priority, falls back to cache if API fails
+ * Strictly respects the free tier rate limit of 1 request per minute
  */
 router.post('/:address/refresh', async (req, res) => {
   try {
@@ -349,6 +294,48 @@ router.post('/:address/refresh', async (req, res) => {
     
     // Get related transactions
     const relatedTransactions = await getRelatedTransactions(address);
+    
+    // Check if we're within rate limits first
+    const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+    if (timeUntilNextAllowed > 0) {
+      logger.warn(`Manual wallet refresh requested for ${address} but within rate limit cooldown (${Math.round(timeUntilNextAllowed/1000)}s remaining)`);
+      
+      // Return cached data with rate limit explanation
+      if (existingWallet.length > 0) {
+        return res.json({
+          ...existingWallet[0],
+          transactions: relatedTransactions,
+          using_cached_data: true,
+          rate_limited: true,
+          success: false,
+          message: `Using cached data due to rate limit. Next API request allowed in ${Math.round(timeUntilNextAllowed/1000)} seconds.`,
+          time_until_next_allowed: Math.round(timeUntilNextAllowed/1000)
+        });
+      }
+      
+      // If no cached wallet data but we have transactions, create a basic record from transactions
+      if (relatedTransactions.length > 0) {
+        const basicWallet = await createBasicWalletFromTransactions(address, relatedTransactions);
+        
+        if (basicWallet) {
+          return res.json({
+            ...basicWallet,
+            rate_limited: true,
+            success: false,
+            message: `Using derived wallet data from transactions due to API rate limits. Next API request allowed in ${Math.round(timeUntilNextAllowed/1000)} seconds.`,
+            time_until_next_allowed: Math.round(timeUntilNextAllowed/1000)
+          });
+        }
+      }
+      
+      // No data at all, return informative error
+      return res.status(429).json({
+        error: 'Rate limited',
+        message: `API rate limit in effect. Please try again in ${Math.round(timeUntilNextAllowed/1000)} seconds.`,
+        time_until_next_allowed: Math.round(timeUntilNextAllowed/1000),
+        success: false
+      });
+    }
     
     // Check if this address has recently failed within a shorter window (30 seconds)
     // User-initiated refreshes have a much shorter cooldown than background ones
@@ -365,9 +352,10 @@ router.post('/:address/refresh', async (req, res) => {
           transactions: relatedTransactions,
           using_cached_data: true,
           api_limited: true,
-          error_message: "Using cached wallet data due to API rate limits",
+          error_message: "Using cached wallet data due to recent API failures",
           success: false,
-          error: "Recent API failures detected"
+          error: "Recent API failures detected",
+          retry_after: Math.round((shortCooldown - (Date.now() - lastFailedTime))/1000)
         });
       }
     }
@@ -413,7 +401,8 @@ router.post('/:address/refresh', async (req, res) => {
         ...newWallet,
         transactions: relatedTransactions,
         fresh_data: true,
-        success: true
+        success: true,
+        message: 'Wallet data successfully refreshed from API'
       });
     } catch (apiError: any) {
       // Record the failure time
@@ -428,9 +417,10 @@ router.post('/:address/refresh', async (req, res) => {
           transactions: relatedTransactions,
           using_cached_data: true,
           api_limited: true,
-          error_message: "Using cached wallet data due to API rate limits",
+          error_message: "Using cached wallet data due to API errors",
           success: false,
-          error: apiError.message
+          error: apiError.message,
+          retry_after: 30 // Suggest retry after 30 seconds
         });
       }
       
@@ -443,22 +433,44 @@ router.post('/:address/refresh', async (req, res) => {
             ...basicWallet,
             api_limited: true,
             success: false,
-            error_message: "Could not fetch complete wallet data due to API rate limits"
+            error_message: "Could not fetch complete wallet data due to API errors",
+            error: apiError.message,
+            retry_after: 30 // Suggest retry after 30 seconds
           });
         }
       }
       
       // FALLBACK 3: No data at all - return error
-      return res.status(500).json({ 
-        error: 'API rate limit exceeded',
-        message: 'Could not fetch wallet data due to API rate limits. Please try again later.',
-        success: false
+      return res.status(503).json({ 
+        error: 'API error',
+        message: 'Could not fetch wallet data. API request failed.',
+        success: false,
+        error_details: apiError.message,
+        retry_after: 30 // Suggest retry after 30 seconds
       });
     }
   } catch (error) {
     logger.error(`Error in wallet refresh route for ${req.params.address}`, error);
     res.status(500).json({ error: 'Failed to process wallet refresh' });
   }
+});
+
+/**
+ * GET /api/wallets/:address/status
+ * Get the status of a pending wallet request by request ID
+ */
+router.get('/:address/status/:requestId', async (req, res) => {
+  const { requestId } = req.params;
+  const status = getRequestStatus(requestId);
+  if (!status) {
+    return res.status(404).json({ error: 'Request not found' });
+  }
+  res.json({
+    status: status.status,
+    result: status.result,
+    error: status.error,
+    estimated_wait_ms: getEstimatedWaitTimeForRequest(requestId)
+  });
 });
 
 export default router; 

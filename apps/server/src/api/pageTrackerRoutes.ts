@@ -7,13 +7,16 @@ const router = express.Router();
 
 /**
  * POST /api/page-tracker/enter
- * Register a user entering a page
+ * Register a user entering a page (use 'home' for homepage/dashboard)
  */
 router.post('/enter', (req, res) => {
   try {
     const { pageType, userId } = req.body;
     
+    logger.info(`👁️ Page ENTER request received: User ${userId} entered '${pageType}' page`);
+    
     if (!pageType) {
+      logger.warn('Page tracker received enter request without pageType');
       return res.status(400).json({ error: 'Page type is required' });
     }
     
@@ -24,6 +27,10 @@ router.post('/enter', (req, res) => {
       scheduleDelayedTransactionFetch();
     }
     
+    // Log active page counts after update
+    const activePages = pageTracker.getStatus();
+    logger.info(`👁️ Active pages after ENTER: ${JSON.stringify(activePages)}`);
+    
     res.json({ success: true });
   } catch (error) {
     logger.error('Error tracking page entry', error);
@@ -33,13 +40,16 @@ router.post('/enter', (req, res) => {
 
 /**
  * POST /api/page-tracker/leave
- * Register a user leaving a page
+ * Register a user leaving a page (use 'home' for homepage/dashboard)
  */
 router.post('/leave', (req, res) => {
   try {
     const { pageType, userId } = req.body;
     
+    logger.info(`👁️ Page LEAVE request received: User ${userId} left '${pageType}' page`);
+    
     if (!pageType) {
+      logger.warn('Page tracker received leave request without pageType');
       return res.status(400).json({ error: 'Page type is required' });
     }
     
@@ -50,6 +60,10 @@ router.post('/leave', (req, res) => {
       cancelDelayedTransactionFetch();
     }
     
+    // Log active page counts after update
+    const activePages = pageTracker.getStatus();
+    logger.info(`👁️ Active pages after LEAVE: ${JSON.stringify(activePages)}`);
+    
     res.json({ success: true });
   } catch (error) {
     logger.error('Error tracking page exit', error);
@@ -59,11 +73,12 @@ router.post('/leave', (req, res) => {
 
 /**
  * GET /api/page-tracker/status
- * Get the current status of page trackers
+ * Get the current status of page trackers (homepage is 'home')
  */
 router.get('/status', (req, res) => {
   try {
     const status = pageTracker.getStatus();
+    logger.info(`👁️ Page tracker status requested: ${JSON.stringify(status)}`);
     res.json(status);
   } catch (error) {
     logger.error('Error getting page tracker status', error);

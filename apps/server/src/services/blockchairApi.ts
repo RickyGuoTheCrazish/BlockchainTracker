@@ -5,25 +5,6 @@ import { blockchairQueue, RequestPriority } from './blockchairRequestQueue.js';
 
 const BLOCKCHAIR_BASE_URL = 'https://api.blockchair.com';
 
-// This throttling function will be kept for backward compatibility
-// but all calls should now go through the request queue
-async function throttleApiCall() {
-  logger.warn('Direct throttleApiCall used - should be migrated to request queue');
-  const now = Date.now();
-  const timeSinceLastCall = now - lastApiCallTime;
-  
-  if (timeSinceLastCall < env.API_THROTTLE_MS) {
-    const waitTime = env.API_THROTTLE_MS - timeSinceLastCall;
-    logger.debug(`Throttling API call, waiting ${waitTime}ms`);
-    await new Promise(resolve => setTimeout(resolve, waitTime));
-  }
-  
-  lastApiCallTime = Date.now();
-}
-
-// Legacy API throttling (kept for compatibility)
-let lastApiCallTime = 0;
-
 /**
  * Fetch dashboard stats from Blockchair
  */
@@ -31,19 +12,14 @@ export async function fetchDashboardStats() {
   return blockchairQueue.addRequest(
     async () => {
       const response = await fetch(`${BLOCKCHAIR_BASE_URL}/stats`);
-      
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
-      
       return await response.json();
     },
     false, // Not a user request
     'Fetch dashboard stats'
-  ).catch(error => {
-    logger.error('Error fetching dashboard stats', error);
-    throw error;
-  });
+  );
 }
 
 /**
@@ -55,19 +31,14 @@ export async function fetchRecentBitcoinTransactions(limit = 10) {
       const response = await fetch(
         `${BLOCKCHAIR_BASE_URL}/bitcoin/mempool/transactions?limit=${limit}`
       );
-      
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
-      
       return await response.json();
     },
     false, // Not a user request
     `Fetch recent Bitcoin transactions (limit: ${limit})`
-  ).catch(error => {
-    logger.error('Error fetching recent Bitcoin transactions', error);
-    throw error;
-  });
+  );
 }
 
 /**
@@ -79,19 +50,14 @@ export async function fetchRecentEthereumTransactions(limit = 10) {
       const response = await fetch(
         `${BLOCKCHAIR_BASE_URL}/ethereum/mempool/transactions?limit=${limit}`
       );
-      
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
-      
       return await response.json();
     },
     false, // Not a user request
     `Fetch recent Ethereum transactions (limit: ${limit})`
-  ).catch(error => {
-    logger.error('Error fetching recent Ethereum transactions', error);
-    throw error;
-  });
+  );
 }
 
 /**
@@ -104,19 +70,14 @@ export async function fetchWalletByAddress(chain: 'bitcoin' | 'ethereum', addres
       const response = await fetch(
         `${BLOCKCHAIR_BASE_URL}/${chain}/dashboards/address/${address}`
       );
-      
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
-      
       return await response.json();
     },
     isUserRequest, // Usually a user-initiated request
     `Fetch ${chain} wallet ${address}`
-  ).catch(error => {
-    logger.error(`Error fetching ${chain} wallet ${address}`, error);
-    throw error;
-  });
+  );
 }
 
 /**
@@ -127,34 +88,25 @@ export async function fetchWalletByAddress(chain: 'bitcoin' | 'ethereum', addres
  * @returns Promise with wallet data
  */
 export async function fetchWalletByAddressCritical(chain: 'bitcoin' | 'ethereum', address: string) {
-  // Enable exclusive mode before making the request
   blockchairQueue.enterExclusiveMode(false);
-  
   logger.info(`Making CRITICAL wallet request for ${address} (exclusive mode)`);
-  
   try {
-    // Make the critical request with a unique ID based on the address
     const walletData = await blockchairQueue.addCriticalRequest(
       async () => {
         const response = await fetch(
           `${BLOCKCHAIR_BASE_URL}/${chain}/dashboards/address/${address}`
         );
-        
         if (!response.ok) {
           throw new Error(`API error: ${response.status} ${response.statusText}`);
         }
-        
         return await response.json();
       },
       `CRITICAL Fetch ${chain} wallet ${address}`,
-      address // Use the address as the exclusive ID
+      address
     );
-    
-    // Exit exclusive mode after successful fetch
     blockchairQueue.exitExclusiveMode();
     return walletData;
   } catch (error) {
-    // Make sure to exit exclusive mode even on error
     blockchairQueue.exitExclusiveMode();
     logger.error(`Error in critical fetch for ${chain} wallet ${address}`, error);
     throw error;
@@ -171,19 +123,35 @@ export async function fetchTransactionByHash(chain: 'bitcoin' | 'ethereum', hash
       const response = await fetch(
         `${BLOCKCHAIR_BASE_URL}/${chain}/dashboards/transaction/${hash}`
       );
-      
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
-      
       return await response.json();
     },
     isUserRequest, // Usually a user-initiated request
     `Fetch ${chain} transaction ${hash}`
-  ).catch(error => {
-    logger.error(`Error fetching ${chain} transaction ${hash}`, error);
-    throw error;
-  });
+  );
+}
+
+/**
+ * Helper to get estimated wait time for a new request
+ */
+export function getEstimatedWaitTimeForNewRequest() {
+  return blockchairQueue.getEstimatedWaitTime();
+}
+
+/**
+ * Helper to get estimated wait time for a specific request ID
+ */
+export function getEstimatedWaitTimeForRequest(id: string) {
+  return blockchairQueue.getEstimatedWaitTimeForRequest(id);
+}
+
+/**
+ * Helper to get request status by ID
+ */
+export function getRequestStatus(id: string) {
+  return blockchairQueue.getRequestStatus(id);
 }
 
 /**

@@ -18,9 +18,10 @@ class PageTracker {
    * @param userId Optional user identifier for tracking individual sessions
    */
   userEntered(pageType: string, userId: string = 'anonymous'): void {
+    // Treat empty string as 'home'
+    if (pageType === '') pageType = 'home';
     const currentCount = this.activePages.get(pageType) || 0;
     this.activePages.set(pageType, currentCount + 1);
-    
     logger.debug(`User ${userId} entered ${pageType} page. Active users: ${currentCount + 1}`);
   }
   
@@ -30,6 +31,8 @@ class PageTracker {
    * @param userId Optional user identifier for tracking individual sessions
    */
   userLeft(pageType: string, userId: string = 'anonymous'): void {
+    // Treat empty string as 'home'
+    if (pageType === '') pageType = 'home';
     const currentCount = this.activePages.get(pageType) || 0;
     if (currentCount > 0) {
       this.activePages.set(pageType, currentCount - 1);
@@ -43,12 +46,9 @@ class PageTracker {
    * @returns true if at least one user is viewing the page
    */
   isPageActive(pageType: string): boolean {
-    // Handle homepage and dashboard as equivalent
-    if (pageType === 'homepage' || pageType === 'dashboard') {
-      return (this.activePages.get('homepage') || 0) > 0 || 
-             (this.activePages.get('dashboard') || 0) > 0;
-    }
-    
+    // Treat empty string as 'home'
+    if (pageType === '') pageType = 'home';
+    // Check if the requested page type is active
     return (this.activePages.get(pageType) || 0) > 0;
   }
   
@@ -58,12 +58,12 @@ class PageTracker {
    * @returns The number of users viewing the page
    */
   getActiveCount(pageType: string): number {
-    // For homepage and dashboard, combine the counts
-    if (pageType === 'homepage' || pageType === 'dashboard') {
-      return (this.activePages.get('homepage') || 0) + 
-             (this.activePages.get('dashboard') || 0);
+    // Treat empty string as 'home'
+    if (pageType === '') pageType = 'home';
+    // Only count 'home' for homepage
+    if (pageType === 'home') {
+      return this.activePages.get('home') || 0;
     }
-    
     return this.activePages.get(pageType) || 0;
   }
   
@@ -75,12 +75,10 @@ class PageTracker {
     this.activePages.forEach((count, pageType) => {
       status[pageType] = count;
     });
-    
-    // Add combined count for dashboard/homepage
-    if (this.activePages.has('homepage') || this.activePages.has('dashboard')) {
-      status['homepage_or_dashboard'] = this.getActiveCount('homepage');
+    // Add homepage count for clarity
+    if (this.activePages.has('home')) {
+      status['homepage'] = this.getActiveCount('home');
     }
-    
     return status;
   }
 }
