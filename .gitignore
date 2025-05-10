@@ -12,7 +12,7 @@ build/
 .env
 .env.*
 !.env.example
-/config/*.env
+# /config/*.env
 
 # Logs
 logs

@@ -286,10 +286,24 @@ class BlockchairRequestQueue {
     if (this.requestScheduled) return;
     if (this.globalUserPause) return;
     if (this.queue.length === 0 || this.paused) return;
+    
     this.requestScheduled = true;
     const now = Date.now();
+    
+    // If no request has been made yet (lastRequestTime is 0), or if no requests have been processed successfully
+    if (this.lastRequestTime === 0 || this.totalProcessed === 0) {
+      logger.debug('Scheduling immediate processing of first request');
+      setTimeout(() => {
+        this.requestScheduled = false;
+        this.processQueue();
+      }, 0);
+      return;
+    }
+    
     const timeSinceLastRequest = now - this.lastRequestTime;
     const waitTime = Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+    
+    logger.debug(`Scheduling next request with ${waitTime/1000}s wait time (last request: ${timeSinceLastRequest/1000}s ago)`);
     setTimeout(() => {
       this.requestScheduled = false;
       this.processQueue();
@@ -482,8 +496,20 @@ class BlockchairRequestQueue {
    */
   getTimeUntilNextRequest(): number {
     const now = Date.now();
+    // If no request has been made yet or if we're processing the first request since startup
+    if (this.lastRequestTime === 0) {
+      logger.debug(`No prior requests made (lastRequestTime=0), no wait needed`);
+      return 0;
+    }
     const timeSinceLastRequest = now - this.lastRequestTime;
-    return Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+    // Only apply rate limiting if we've actually made a request
+    if (this.totalProcessed > 0) {
+      const waitTime = Math.max(0, this.FREE_TIER_RATE_LIMIT_MS - timeSinceLastRequest);
+      logger.debug(`Last request was ${Math.round(timeSinceLastRequest/1000)}s ago, wait time: ${Math.round(waitTime/1000)}s`);
+      return waitTime;
+    }
+    logger.debug(`No requests processed yet (totalProcessed=0), no wait needed`);
+    return 0;
   }
 
   /**

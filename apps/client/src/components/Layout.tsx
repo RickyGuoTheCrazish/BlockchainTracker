@@ -53,7 +53,7 @@ const Layout = () => {
         <Outlet />
       </main>
       <footer className="app-footer">
-        <p>© 2023 Blockchain Tracker</p>
+        <p>© 2025 Blockchain Tracker</p>
       </footer>
     </div>
   );

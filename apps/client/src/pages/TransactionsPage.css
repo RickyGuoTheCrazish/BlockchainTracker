@@ -21,7 +21,8 @@
 .transactions-controls {
   display: flex;
   align-items: center;
-  margin-left: auto;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .sort-toggle-button {
@@ -109,10 +110,10 @@
 }
 
 .transactions-info {
-  text-align: center;
-  color: var(--text-color-secondary);
+  margin-top: 15px;
+  color: #7f8c8d;
   font-size: 0.9rem;
-  margin-top: 0.5rem;
+  text-align: center;
 }
 
 .transaction-hash-button {
@@ -238,4 +239,81 @@
 .refresh-button:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
+}
+
+.refresh-button.db-refresh {
+  background-color: #3498db;
+  margin-right: 8px;
+}
+
+.refresh-button.db-refresh:hover {
+  background-color: #2980b9;
+}
+
+.refresh-button.api-refresh {
+  background-color: #27ae60;
+  margin-right: 8px;
+}
+
+.refresh-button.api-refresh:hover {
+  background-color: #2ecc71;
+}
+
+/* Blockchain filter styles */
+.blockchain-filter {
+  display: flex;
+  align-items: center;
+  margin-right: 15px;
+}
+
+.blockchain-filter span {
+  margin-right: 10px;
+  font-weight: 500;
+}
+
+.filter-buttons {
+  display: flex;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #2c3e50;
+}
+
+.filter-button {
+  padding: 6px 12px;
+  background-color: #34495e;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+  border-right: 1px solid #2c3e50;
+  transition: background-color 0.2s ease;
+}
+
+.filter-button:last-child {
+  border-right: none;
+}
+
+.filter-button:hover {
+  background-color: #4a6785;
+}
+
+.filter-button.active {
+  background-color: #1e2b3a;
+  font-weight: bold;
+}
+
+.filter-button.bitcoin {
+  color: #f7931a;
+}
+
+.filter-button.bitcoin.active {
+  background-color: rgba(247, 147, 26, 0.15);
+}
+
+.filter-button.ethereum {
+  color: #62688f;
+}
+
+.filter-button.ethereum.active {
+  background-color: rgba(98, 104, 143, 0.15);
 } 

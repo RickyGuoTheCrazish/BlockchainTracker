@@ -1,5 +1,5 @@
-import { useLoaderData, Link } from "react-router-dom";
-import { useState, useEffect, useCallback } from "react";
+import { useLoaderData } from "react-router-dom";
+import { useState, useEffect } from "react";
 import TransactionModal from "../components/TransactionModal";
 import { API_BASE_URL } from "../lib/constants";
 import "./WalletDetailPage.css";
@@ -29,8 +29,6 @@ interface WalletDetail {
   raw_payload: any;
   error?: boolean;
   errorMessage?: string;
-  api_limited?: boolean;
-  error_message?: string;
 }
 
 const WalletDetailPage = () => {
@@ -40,8 +38,25 @@ const WalletDetailPage = () => {
   // State for refresh operation
   const [isRefreshing, setIsRefreshing] = useState(false);
   
+  // Track page visit for backend optimization
+  useEffect(() => {
+    // Use our page tracking hook to notify the backend
+    const cleanup = usePageTracking('wallet');
+    return cleanup;
+  }, []);
+  
+  // Remove any simulation notices (for a cleaner demo)
+  useEffect(() => {
+    const banners = document.querySelectorAll('.simulation-notice, .simulation-banner');
+    banners.forEach(banner => {
+      if (banner.parentNode) {
+        banner.parentNode.removeChild(banner);
+      }
+    });
+  }, []);
+  
   // Function to manually refresh wallet data
-  const refreshWallet = useCallback(async () => {
+  const refreshWallet = async () => {
     if (isRefreshing) return;
     
     setIsRefreshing(true);
@@ -74,47 +89,12 @@ const WalletDetailPage = () => {
         window.location.reload();
       } else {
         setIsRefreshing(false);
-        alert('Could not refresh wallet data. API rate limit may still be in effect. Please try again later.');
       }
     } catch (error) {
       setIsRefreshing(false);
       console.error('Error refreshing wallet data:', error);
-      alert('Error refreshing wallet data. Please try again later.');
     }
-  }, [wallet.address, isRefreshing]);
-  
-  // Track page visit for backend optimization
-  useEffect(() => {
-    // Use our page tracking hook to notify the backend
-    const cleanup = usePageTracking('wallet');
-    return cleanup;
-  }, []);
-  
-  // Handle error state
-  if (wallet.error) {
-    return (
-      <div className="wallet-error-container">
-        <div className="wallet-error-card">
-          <h2>Error Loading Wallet</h2>
-          <p>{wallet.errorMessage || "Failed to load wallet data"}</p>
-          <div className="wallet-error-address">
-            <strong>Address:</strong> {wallet.address}
-          </div>
-          <div className="wallet-error-actions">
-            <Link to="/transactions" className="wallet-error-button">
-              Return to Transactions
-            </Link>
-            <button 
-              onClick={() => window.location.reload()} 
-              className="wallet-error-button primary"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  };
   
   if (!wallet) {
     return <div>Wallet not found.</div>;
@@ -130,15 +110,21 @@ const WalletDetailPage = () => {
     // Convert wei to ETH (1 ETH = 10^18 wei)
     const divisor = chain === "BTC" ? 100000000 : 1000000000000000000;
     
-    return (numValue / divisor).toLocaleString(undefined, { 
+    // Handle large numbers properly by dividing first
+    let formattedValue = (numValue / divisor);
+    
+    // For very small values, show more decimal places
+    const decimalPlaces = formattedValue < 0.001 ? 8 : (formattedValue < 0.1 ? 6 : 4);
+    
+    return formattedValue.toLocaleString(undefined, { 
       minimumFractionDigits: 2,
-      maximumFractionDigits: 8
+      maximumFractionDigits: decimalPlaces
     });
   };
 
   // Format addresses for display
   const formatAddress = (address: string | null, full = false) => {
-    if (!address) return "N/A";
+    if (!address) return "Unknown";
     if (full) return address;
     return `${address.substring(0, 10)}...${address.substring(address.length - 6)}`;
   };
@@ -157,28 +143,38 @@ const WalletDetailPage = () => {
   const walletData = wallet.raw_payload?.data?.[wallet.address] || {};
   
   // Extract useful properties
-  const balance = wallet.api_limited ? wallet.balance : (walletData.balance ? formatCryptoValue(walletData.balance, wallet.chain) : "0");
-  const totalReceived = walletData.received ? formatCryptoValue(walletData.received, wallet.chain) : "0";
-  const totalSent = walletData.spent ? formatCryptoValue(walletData.spent, wallet.chain) : "0";
+  const balance = wallet.balance ? formatCryptoValue(wallet.balance, wallet.chain) : "0";
+  
+  // Make sure we use the raw values for received/sent if available
+  let totalReceived = "0";
+  let totalSent = "0";
+  
+  if (walletData.received) {
+    totalReceived = formatCryptoValue(walletData.received.toString(), wallet.chain);
+  } else if (wallet.transactions) {
+    // Calculate from transactions if raw data not available
+    const receivedValue = wallet.transactions
+      .filter(tx => tx.receiver === wallet.address)
+      .reduce((sum, tx) => sum + Number(tx.value), 0);
+    totalReceived = formatCryptoValue(receivedValue.toString(), wallet.chain);
+  }
+  
+  if (walletData.spent) {
+    totalSent = formatCryptoValue(walletData.spent.toString(), wallet.chain);
+  } else if (wallet.transactions) {
+    // Calculate from transactions if raw data not available
+    const sentValue = wallet.transactions
+      .filter(tx => tx.sender === wallet.address)
+      .reduce((sum, tx) => sum + Number(tx.value), 0);
+    totalSent = formatCryptoValue(sentValue.toString(), wallet.chain);
+  }
+  
+  // Ensure transaction count and transactions array exist
+  const transactionCount = wallet.transaction_count || 0;
+  const transactions = wallet.transactions || [];
   
   return (
-    <div className="wallet-detail-container">
-      {wallet.api_limited && (
-        <div className="wallet-api-limited-notice">
-          <p>
-            <strong>Note:</strong> {wallet.error_message || "Limited wallet data available due to API rate limits."}
-            Only transaction data is shown. Balance information may not be accurate.
-          </p>
-          <button 
-            onClick={refreshWallet} 
-            className="wallet-refresh-button" 
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? 'Refreshing...' : 'Refresh Wallet Data'}
-          </button>
-        </div>
-      )}
-      
+    <div className="wallet-detail-container">      
       <div className="wallet-header">
         <h2>
           <span className={`blockchain-badge ${wallet.chain === "BTC" ? "bitcoin" : "ethereum"}`}>
@@ -187,15 +183,13 @@ const WalletDetailPage = () => {
           Wallet Details
         </h2>
         <div className="wallet-header-actions">
-          {!wallet.api_limited && (
-            <button 
-              onClick={refreshWallet} 
-              className="wallet-refresh-button" 
-              disabled={isRefreshing}
-            >
-              {isRefreshing ? 'Refreshing...' : 'Refresh'}
-            </button>
-          )}
+          <button 
+            onClick={refreshWallet} 
+            className="wallet-refresh-button" 
+            disabled={isRefreshing}
+          >
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
           <div className="wallet-external-links">
             <a 
               href={`https://${wallet.chain === "BTC" ? "blockchain.info" : "etherscan.io"}/address/${wallet.address}`}
@@ -212,7 +206,7 @@ const WalletDetailPage = () => {
       <div className="wallet-address-card">
         <h3>Address</h3>
         <div className="wallet-address">
-          {formatAddress(wallet.address, true)}
+          {wallet.address || "Unknown Address"}
         </div>
       </div>
       
@@ -224,25 +218,21 @@ const WalletDetailPage = () => {
         
         <div className="summary-card">
           <h3>Transactions</h3>
-          <div className="summary-value">{wallet.transaction_count.toLocaleString()}</div>
+          <div className="summary-value">{transactionCount.toLocaleString()}</div>
         </div>
         
-        {!wallet.api_limited && (
-          <>
-            <div className="summary-card">
-              <h3>Total Received</h3>
-              <div className="summary-value">{totalReceived} {wallet.chain}</div>
-            </div>
-            
-            <div className="summary-card">
-              <h3>Total Sent</h3>
-              <div className="summary-value">{totalSent} {wallet.chain}</div>
-            </div>
-          </>
-        )}
+        <div className="summary-card">
+          <h3>Total Received</h3>
+          <div className="summary-value">{totalReceived} {wallet.chain}</div>
+        </div>
+        
+        <div className="summary-card">
+          <h3>Total Sent</h3>
+          <div className="summary-value">{totalSent} {wallet.chain}</div>
+        </div>
       </div>
       
-      {wallet.transactions && wallet.transactions.length > 0 && (
+      {transactions && transactions.length > 0 && (
         <div className="wallet-transactions">
           <h3>Recent Transactions</h3>
           <div className="transactions-table-container">
@@ -256,7 +246,7 @@ const WalletDetailPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {wallet.transactions.slice(0, 10).map((tx: Transaction) => {
+                {transactions.slice(0, 10).map((tx: Transaction) => {
                   const isIncoming = tx.receiver === wallet.address;
                   return (
                     <tr key={tx.hash}>

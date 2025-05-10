@@ -178,4 +178,74 @@
 .no-wallets-message p {
   color: var(--text-color-secondary);
   margin: 0;
+}
+
+.wallet-header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.use-demo-button {
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.use-demo-button:hover {
+  background-color: #5a6268;
+}
+
+.use-demo-button.large {
+  font-size: 16px;
+  padding: 12px 24px;
+  margin-top: 20px;
+}
+
+.wallet-simulation-notice {
+  background-color: #fff3cd;
+  border: 1px solid #ffecb5;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  color: #856404;
+}
+
+.simulation-notice {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1000;
+}
+
+.simulation-banner {
+  background-color: #fff3cd;
+  color: #856404;
+  padding: 10px 20px;
+  text-align: center;
+  border-bottom: 1px solid #ffeeba;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.simulation-banner p {
+  margin: 5px 0 0 0;
+  font-size: 14px;
+}
+
+.clickable-row {
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.clickable-row:hover {
+  background-color: #f5f5f5;
+}
+
+.wallet-address-text {
+  color: #007bff;
 } 

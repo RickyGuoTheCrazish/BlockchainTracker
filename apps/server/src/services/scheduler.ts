@@ -10,7 +10,8 @@ import {
   fetchRecentEthereumTransactions,
   fetchTransactionByHash,
   extractSenderAddress,
-  extractReceiverAddress
+  extractReceiverAddress,
+  fetchRecentTransactionsWithTimeFilter
 } from './blockchairApi.js';
 import { eq, desc, sql } from 'drizzle-orm';
 import { pageTracker } from './pageTracker.js';
@@ -111,10 +112,27 @@ export function scheduleDelayedTransactionFetch() {
     clearTimeout(delayedFetchTimeout);
   }
   
+  // Check if the queue is empty and no API calls have been made yet
+  if (blockchairQueue.getStatus().totalProcessed === 0 || blockchairQueue.getStatus().lastRequestTime === 0) {
+    logger.debug('Scheduling immediate transaction fetch (no prior API calls)');
+    // Use a tiny delay just to let other operations finish
+    delayedFetchTimeout = setTimeout(async () => {
+      if (blockchairQueue.isGloballyPaused() || blockchairQueue.isSchedulerPaused()) {
+        logger.info('Skipping immediate transaction fetch due to system pause');
+        return;
+      }
+      
+      logger.debug('Executing immediate transaction fetch (no prior API calls)');
+      await fetchAndStoreTransactions(true);
+      delayedFetchTimeout = null;
+    }, 1000);
+    return;
+  }
+  
   // Calculate how long we should wait based on rate limits
-  // We wait at least 60 seconds, but longer if needed for rate limiting
   const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
-  const delayTime = Math.max(60000, timeUntilNextAllowed + 1000);
+  // Add a small buffer to ensure we're not hitting rate limits
+  const delayTime = Math.max(timeUntilNextAllowed + 1000, 5000);
   
   logger.debug(`Scheduling delayed transaction fetch (${Math.round(delayTime/1000)}s delay, respecting rate limits)`);
   
@@ -206,90 +224,125 @@ async function fetchAndStoreTransactions(isUserRequest: boolean = false) {
     logger.debug(`Fetching recent transactions (user-initiated: ${isUserRequest})`);
     
     // Calculate how many transactions to fetch from each blockchain
-    // Reducing the total number helps minimize API calls for details later
-    const limit = 5; // Reduced from env.MAX_TRANSACTIONS/2 to minimize API calls
+    const limit = 10; // Number of transactions to fetch from each blockchain - Blockchair batch limit
+    const timeMinutes = 15; // Look for transactions from the last 15 minutes
     
-    // Fetch Bitcoin transactions (with proper priority flag)
-    const btcTxData = await fetchRecentBitcoinTransactions(limit);
-    if (btcTxData && btcTxData.data) {
-      const txList = Object.values(btcTxData.data) as any[];
-      // Use only the first few to reduce API calls
-      for (let i = 0; i < Math.min(txList.length, limit); i++) {
-        const tx = txList[i];
-        if (!tx.hash) continue;
+    // ----- FETCH BITCOIN TRANSACTIONS -----
+    logger.info('Fetching Bitcoin transactions...');
+    
+    // First try using our optimized batch API approach
+    try {
+      const btcTxData = await fetchRecentTransactionsWithTimeFilter('bitcoin', timeMinutes, limit, isUserRequest);
+      await processTransactionData('BTC', btcTxData, isUserRequest);
+      logger.info('Successfully processed Bitcoin transactions with batch API');
+    } catch (batchError: any) {
+      logger.warn(`Batch Bitcoin fetch failed, falling back to individual fetches: ${batchError.message}`);
+      
+      // Fall back to the original approach if batch fails
+      const btcTxData = await fetchRecentBitcoinTransactions(limit);
+      
+      if (btcTxData && btcTxData.data && Array.isArray(btcTxData.data)) {
+        let processedCount = 0;
         
-        try {
-          // Check if we need to insert this transaction at all
+        logger.info(`Processing ${btcTxData.data.length} Bitcoin transactions individually`);
+        
+        for (const tx of btcTxData.data) {
+          if (!tx || !tx.hash) continue;
+          
+          // Check if we already have this transaction
           const existingTx = await db.select()
             .from(transactions)
             .where(eq(transactions.hash, tx.hash))
             .limit(1);
             
           if (existingTx.length > 0) {
-            logger.debug(`Transaction ${tx.hash} already exists, skipping detailed fetch to save API calls`);
+            logger.debug(`Transaction ${tx.hash} already exists, skipping`);
             continue;
           }
-        
-          // Check rate limits before fetching details - only fetch if we're within limits
-          const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
-          if (timeUntilNextAllowed > 0) {
-            logger.info(`Deferring transaction detail fetch for ${Math.round(timeUntilNextAllowed/1000)}s due to free tier rate limit`);
-            await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 500));
-          }
           
-          // Now fetch details
-          const txDetails = await fetchTransactionByHash('bitcoin', tx.hash, isUserRequest);
-          
-          if (txDetails && txDetails.data && txDetails.data[tx.hash]) {
-            const detailedTx = txDetails.data[tx.hash];
+          // First, try to get the transaction details with inputs/outputs
+          try {
+            // Make sure we respect rate limits between individual transaction fetches
+            const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+            if (timeUntilNextAllowed > 0) {
+              logger.debug(`Waiting ${Math.round(timeUntilNextAllowed/1000)}s before fetching next transaction details`);
+              await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 1000));
+            }
+            
+            // Pass the isUserRequest flag down to the API call
+            const txDetails = await fetchTransactionByHash('bitcoin', tx.hash, isUserRequest);
+            
+            if (txDetails && txDetails.data && txDetails.data[tx.hash]) {
+              const detailedTx = txDetails.data[tx.hash];
+              
+              await insertTransaction({
+                hash: tx.hash,
+                chain: 'BTC',
+                block_number: tx.block_id || null,
+                block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                          (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+                value: String(tx.output_total || tx.value || '0'),
+                fee: String(tx.fee || '0'),
+                sender: extractSenderAddress(detailedTx, 'bitcoin') || 'Unknown',
+                receiver: extractReceiverAddress(detailedTx, 'bitcoin') || 'Unknown',
+                status: tx.block_id ? 'confirmed' : 'pending',
+                raw_payload: {
+                  transaction: tx,
+                  details: detailedTx
+                },
+              });
+              
+              processedCount++;
+              logger.debug(`Processed Bitcoin transaction ${tx.hash} with detailed info`);
+            } else {
+              // Fall back to simple transaction data
+              await insertTransaction({
+                hash: tx.hash,
+                chain: 'BTC',
+                block_number: tx.block_id || null,
+                block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                          (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+                value: String(tx.output_total || tx.value || '0'),
+                fee: String(tx.fee || '0'),
+                sender: (tx.input_addresses && tx.input_addresses[0]) || 'Unknown',
+                receiver: (tx.output_addresses && tx.output_addresses[0]) || 'Unknown',
+                status: tx.block_id ? 'confirmed' : 'pending',
+                raw_payload: tx,
+              });
+              
+              processedCount++;
+              logger.debug(`Processed Bitcoin transaction ${tx.hash} with basic info`);
+            }
+          } catch (fetchError: any) {
+            // If detailed fetch fails, try with simple data
+            logger.debug(`Error fetching details for ${tx.hash}: ${fetchError.message}`);
             
             await insertTransaction({
               hash: tx.hash,
               chain: 'BTC',
               block_number: tx.block_id || null,
-              block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
-              value: String(tx.output_total || '0'),
+              block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                        (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+              value: String(tx.output_total || tx.value || '0'),
               fee: String(tx.fee || '0'),
-              sender: extractSenderAddress(detailedTx, 'bitcoin'),
-              receiver: extractReceiverAddress(detailedTx, 'bitcoin'),
-              status: tx.block_id ? 'confirmed' : 'pending',
-              raw_payload: {
-                transaction: tx,
-                details: detailedTx
-              },
-            });
-          } else {
-            // Fall back to simple transaction data
-            await insertTransaction({
-              hash: tx.hash,
-              chain: 'BTC',
-              block_number: tx.block_id || null,
-              block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
-              value: String(tx.output_total || '0'),
-              fee: String(tx.fee || '0'),
-              sender: tx.input_addresses?.[0] || null,
-              receiver: tx.output_addresses?.[0] || null,
+              sender: (tx.input_addresses && tx.input_addresses[0]) || 'Unknown',
+              receiver: (tx.output_addresses && tx.output_addresses[0]) || 'Unknown',
               status: tx.block_id ? 'confirmed' : 'pending',
               raw_payload: tx,
             });
+            
+            processedCount++;
+            logger.debug(`Processed Bitcoin transaction ${tx.hash} with fallback info after error`);
           }
-        } catch (fetchError: any) {
-          // If detailed fetch fails, try with simple data
-          logger.debug(`Error fetching details for ${tx.hash}: ${fetchError.message}`);
           
-          await insertTransaction({
-            hash: tx.hash,
-            chain: 'BTC',
-            block_number: tx.block_id || null,
-            block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
-            value: String(tx.output_total || '0'),
-            fee: String(tx.fee || '0'),
-            sender: tx.input_addresses?.[0] || null,
-            receiver: tx.output_addresses?.[0] || null,
-            status: tx.block_id ? 'confirmed' : 'pending',
-            raw_payload: tx,
-          });
+          // Limit the number of individual fetches to respect rate limits
+          if (processedCount >= 5) {
+            logger.info(`Limiting to ${processedCount} individual Bitcoin transactions to respect rate limits`);
+            break;
+          }
         }
+        
+        logger.info(`Successfully processed ${processedCount} Bitcoin transactions individually`);
       }
     }
     
@@ -300,85 +353,119 @@ async function fetchAndStoreTransactions(isUserRequest: boolean = false) {
       await new Promise(resolve => setTimeout(resolve, timeBeforeEthFetch + 500));
     }
     
-    // Fetch Ethereum transactions (with proper priority flag)
-    const ethTxData = await fetchRecentEthereumTransactions(limit);
-    if (ethTxData && ethTxData.data) {
-      const txList = Object.values(ethTxData.data) as any[];
-      // Use only the first few to reduce API calls
-      for (let i = 0; i < Math.min(txList.length, limit); i++) {
-        const tx = txList[i];
-        if (!tx.hash) continue;
+    // ----- FETCH ETHEREUM TRANSACTIONS -----
+    logger.info('Fetching Ethereum transactions...');
+    
+    // First try using our optimized batch API approach
+    try {
+      const ethTxData = await fetchRecentTransactionsWithTimeFilter('ethereum', timeMinutes, limit, isUserRequest);
+      await processTransactionData('ETH', ethTxData, isUserRequest);
+      logger.info('Successfully processed Ethereum transactions with batch API');
+    } catch (batchError: any) {
+      logger.warn(`Batch Ethereum fetch failed, falling back to individual fetches: ${batchError.message}`);
+      
+      // Fall back to the original approach if batch fails
+      const ethTxData = await fetchRecentEthereumTransactions(limit);
+      
+      if (ethTxData && ethTxData.data && Array.isArray(ethTxData.data)) {
+        let processedCount = 0;
         
-        try {
-          // Check if we need to insert this transaction at all
+        logger.info(`Processing ${ethTxData.data.length} Ethereum transactions individually`);
+        
+        for (const tx of ethTxData.data) {
+          if (!tx || !tx.hash) continue;
+          
+          // Check if we already have this transaction
           const existingTx = await db.select()
             .from(transactions)
             .where(eq(transactions.hash, tx.hash))
             .limit(1);
             
           if (existingTx.length > 0) {
-            logger.debug(`Transaction ${tx.hash} already exists, skipping detailed fetch to save API calls`);
+            logger.debug(`Transaction ${tx.hash} already exists, skipping`);
             continue;
           }
           
-          // Check rate limits before fetching details
-          const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
-          if (timeUntilNextAllowed > 0) {
-            logger.info(`Deferring ETH transaction detail fetch for ${Math.round(timeUntilNextAllowed/1000)}s due to free tier rate limit`);
-            await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 500));
-          }
-          
-          // Pass the isUserRequest flag down to the API call
-          const txDetails = await fetchTransactionByHash('ethereum', tx.hash, isUserRequest);
-          
-          if (txDetails && txDetails.data && txDetails.data[tx.hash]) {
-            const detailedTx = txDetails.data[tx.hash];
+          try {
+            // Make sure we respect rate limits between individual transaction fetches
+            const timeUntilNextAllowed = blockchairQueue.getTimeUntilNextRequest();
+            if (timeUntilNextAllowed > 0) {
+              logger.debug(`Waiting ${Math.round(timeUntilNextAllowed/1000)}s before fetching next transaction details`);
+              await new Promise(resolve => setTimeout(resolve, timeUntilNextAllowed + 1000));
+            }
+            
+            // Pass the isUserRequest flag down to the API call
+            const txDetails = await fetchTransactionByHash('ethereum', tx.hash, isUserRequest);
+            
+            if (txDetails && txDetails.data && txDetails.data[tx.hash]) {
+              const detailedTx = txDetails.data[tx.hash];
+              
+              await insertTransaction({
+                hash: tx.hash,
+                chain: 'ETH',
+                block_number: tx.block_id || null,
+                block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                          (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+                value: String(tx.value || '0'),
+                fee: String(tx.fee || '0'),
+                sender: extractSenderAddress(detailedTx, 'ethereum') || 'Unknown',
+                receiver: extractReceiverAddress(detailedTx, 'ethereum') || 'Unknown',
+                status: tx.block_id ? 'confirmed' : 'pending',
+                raw_payload: {
+                  transaction: tx,
+                  details: detailedTx
+                },
+              });
+              
+              processedCount++;
+              logger.debug(`Processed Ethereum transaction ${tx.hash} with detailed info`);
+            } else {
+              await insertTransaction({
+                hash: tx.hash,
+                chain: 'ETH',
+                block_number: tx.block_id || null,
+                block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                          (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+                value: String(tx.value || '0'),
+                fee: String(tx.fee || '0'),
+                sender: tx.sender || 'Unknown',
+                receiver: tx.recipient || tx.receiver || 'Unknown',
+                status: tx.block_id ? 'confirmed' : 'pending',
+                raw_payload: tx,
+              });
+              
+              processedCount++;
+              logger.debug(`Processed Ethereum transaction ${tx.hash} with basic info`);
+            }
+          } catch (fetchError: any) {
+            logger.debug(`Error fetching details for ${tx.hash}: ${fetchError.message}`);
             
             await insertTransaction({
               hash: tx.hash,
               chain: 'ETH',
               block_number: tx.block_id || null,
-              block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
+              block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                        (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
               value: String(tx.value || '0'),
               fee: String(tx.fee || '0'),
-              sender: extractSenderAddress(detailedTx, 'ethereum'),
-              receiver: extractReceiverAddress(detailedTx, 'ethereum'),
-              status: tx.block_id ? 'confirmed' : 'pending',
-              raw_payload: {
-                transaction: tx,
-                details: detailedTx
-              },
-            });
-          } else {
-            await insertTransaction({
-              hash: tx.hash,
-              chain: 'ETH',
-              block_number: tx.block_id || null,
-              block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
-              value: String(tx.value || '0'),
-              fee: String(tx.fee || '0'),
-              sender: tx.sender || null,
-              receiver: tx.recipient || null,
+              sender: tx.sender || 'Unknown',
+              receiver: tx.recipient || tx.receiver || 'Unknown',
               status: tx.block_id ? 'confirmed' : 'pending',
               raw_payload: tx,
             });
+            
+            processedCount++;
+            logger.debug(`Processed Ethereum transaction ${tx.hash} with fallback info after error`);
           }
-        } catch (fetchError: any) {
-          logger.debug(`Error fetching details for ${tx.hash}: ${fetchError.message}`);
           
-          await insertTransaction({
-            hash: tx.hash,
-            chain: 'ETH',
-            block_number: tx.block_id || null,
-            block_time: tx.time && !isNaN(tx.time) ? new Date(tx.time * 1000) : new Date(),
-            value: String(tx.value || '0'),
-            fee: String(tx.fee || '0'),
-            sender: tx.sender || null,
-            receiver: tx.recipient || null,
-            status: tx.block_id ? 'confirmed' : 'pending',
-            raw_payload: tx,
-          });
+          // Limit the number of individual fetches to respect rate limits
+          if (processedCount >= 5) {
+            logger.info(`Limiting to ${processedCount} individual Ethereum transactions to respect rate limits`);
+            break;
+          }
         }
+        
+        logger.info(`Successfully processed ${processedCount} Ethereum transactions individually`);
       }
     }
     
@@ -393,6 +480,181 @@ async function fetchAndStoreTransactions(isUserRequest: boolean = false) {
     logger.debug('Transactions stored successfully');
   } catch (error) {
     logger.error('Error in fetchAndStoreTransactions', error);
+  }
+}
+
+/**
+ * Helper function to process transaction data from Blockchair API
+ * @param chain Chain identifier (BTC or ETH)
+ * @param txData Response data from Blockchair
+ * @param isUserRequest Whether this is a user-initiated request
+ */
+async function processTransactionData(chain: string, txData: any, isUserRequest: boolean) {
+  if (!txData || !txData.data) {
+    logger.warn(`No ${chain} transaction data found or invalid response format`);
+    return;
+  }
+  
+  // Check if data is in expected format
+  let txList: any[] = [];
+  
+  // Handle different response formats
+  if (Array.isArray(txData.data)) {
+    // Direct array format
+    txList = txData.data;
+    logger.debug(`Processing ${chain} transactions in array format (${txList.length} items)`);
+  } else if (typeof txData.data === 'object') {
+    // Object format with hash keys
+    txList = Object.values(txData.data) as any[];
+    logger.debug(`Processing ${chain} transactions in object format (${txList.length} items)`);
+  } else {
+    logger.warn(`Unexpected data format from ${chain} API: ${typeof txData.data}`);
+    return;
+  }
+  
+  logger.info(`Processing ${txList.length} transactions from ${chain}`);
+  
+  // Log the structure of the first transaction for debugging
+  if (txList.length > 0) {
+    const sampleTx = txList[0];
+    logger.debug(`Sample ${chain} transaction structure:`, JSON.stringify(sampleTx).substring(0, 500));
+  }
+  
+  const newTransactionsToProcess = [];
+  
+  // First, identify which transactions are new and need to be processed
+  for (let i = 0; i < txList.length; i++) {
+    const tx = txList[i];
+    if (!tx || !tx.hash) {
+      logger.debug(`Skipping transaction with no hash`);
+      continue;
+    }
+    
+    // Check if transaction already exists in database
+    const existingTx = await db.select()
+      .from(transactions)
+      .where(eq(transactions.hash, tx.hash))
+      .limit(1);
+      
+    if (existingTx.length === 0) {
+      // This is a new transaction, add it to our processing list
+      newTransactionsToProcess.push(tx);
+    } else {
+      logger.debug(`Transaction ${tx.hash} already exists, skipping`);
+    }
+  }
+  
+  // Log how many new transactions we found
+  logger.info(`Found ${newTransactionsToProcess.length} new ${chain} transactions to process`);
+  
+  // Process new transactions
+  for (const tx of newTransactionsToProcess) {
+    try {
+      // Process based on chain type
+      if (chain === 'BTC') {
+        // For Bitcoin, we need to handle the basic format without detailed address information
+        let senderAddress = null;
+        let receiverAddress = null;
+        
+        // For basic Bitcoin transaction format, like the one shown in the example
+        // We won't have sender/receiver addresses directly - we need to fetch them separately
+        // or use the batch request to get more details
+        
+        // In the simplified basic format, attempt to use any address info we might have
+        if (tx.input_addresses && Array.isArray(tx.input_addresses) && tx.input_addresses.length > 0) {
+          senderAddress = tx.input_addresses[0];
+        }
+        
+        if (tx.output_addresses && Array.isArray(tx.output_addresses) && tx.output_addresses.length > 0) {
+          receiverAddress = tx.output_addresses[0];
+        }
+        
+        // If we have detailed transaction info, try to extract addresses from there
+        if (tx.has_detailed_info) {
+          if (tx.details && tx.details.inputs && Array.isArray(tx.details.inputs) && tx.details.inputs.length > 0) {
+            const senderInput = tx.details.inputs.find((input: any) => input.recipient);
+            senderAddress = senderInput ? senderInput.recipient : senderAddress;
+          }
+          
+          if (tx.details && tx.details.outputs && Array.isArray(tx.details.outputs) && tx.details.outputs.length > 0) {
+            const receiverOutput = tx.details.outputs.find((output: any) => output.recipient);
+            receiverAddress = receiverOutput ? receiverOutput.recipient : receiverAddress;
+          }
+        }
+        
+        // For transactions without address info, use placeholder text
+        // At least we'll store the transaction in the database
+        if (!senderAddress) {
+          logger.warn(`No sender address found for BTC transaction ${tx.hash}`);
+          senderAddress = 'Unknown';
+        }
+        
+        if (!receiverAddress) {
+          logger.warn(`No receiver address found for BTC transaction ${tx.hash}`);
+          receiverAddress = 'Unknown';
+        }
+        
+        logger.debug(`Bitcoin transaction ${tx.hash} - sender: ${senderAddress}, receiver: ${receiverAddress}`);
+        
+        // Insert transaction with the data we have
+        await insertTransaction({
+          hash: tx.hash,
+          chain: 'BTC',
+          block_number: tx.block_id || null,
+          block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                      (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+          value: String(tx.output_total || tx.value || '0'),
+          fee: String(tx.fee || '0'),
+          sender: senderAddress,
+          receiver: receiverAddress,
+          status: tx.block_id ? 'confirmed' : 'pending',
+          raw_payload: tx,
+        });
+      } else if (chain === 'ETH') {
+        let sender = tx.sender || null;
+        let receiver = tx.recipient || tx.receiver || null;
+        
+        // Additional fallbacks for Ethereum
+        if (!sender && tx.transaction && tx.transaction.sender) {
+          sender = tx.transaction.sender;
+        }
+        
+        if (!receiver && tx.transaction && tx.transaction.recipient) {
+          receiver = tx.transaction.recipient;
+        }
+        
+        // For transactions without address info, use placeholder text
+        if (!sender) {
+          logger.warn(`No sender address found for ETH transaction ${tx.hash}`);
+          sender = 'Unknown';
+        }
+        
+        if (!receiver) {
+          logger.warn(`No receiver address found for ETH transaction ${tx.hash}`);
+          receiver = 'Unknown';
+        }
+        
+        logger.debug(`Ethereum transaction ${tx.hash} - sender: ${sender}, receiver: ${receiver}`);
+        
+        await insertTransaction({
+          hash: tx.hash,
+          chain: 'ETH',
+          block_number: tx.block_id || null,
+          block_time: tx.time && !isNaN(Date.parse(tx.time)) ? new Date(tx.time) : 
+                      (tx.time && !isNaN(parseInt(tx.time)) ? new Date(parseInt(tx.time) * 1000) : new Date()),
+          value: String(tx.value || '0'),
+          fee: String(tx.fee || '0'),
+          sender: sender,
+          receiver: receiver,
+          status: tx.block_id ? 'confirmed' : 'pending',
+          raw_payload: tx,
+        });
+      }
+      logger.debug(`Processed ${chain} transaction ${tx.hash}`);
+    } catch (error) {
+      logger.error(`Error processing ${chain} transaction ${tx.hash}:`, error);
+      // Continue with the next transaction
+    }
   }
 }
 
